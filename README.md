@@ -202,7 +202,10 @@ differs, and qwen wrote about twice as many words (515 vs 278) in the second run
 handshake, the request (194 bytes of payload), an ACK, the answer (550 bytes), and the
 connection teardown, started by the server right after it sends the answer. The payload
 sizes equal the 4-byte length prefix plus the JSON computed from the code (190 + 4 = 194 for
-the request).
+the request). In Wireshark's "Follow TCP Stream" the prefix shows up as non-printable
+characters right before the `{` of the JSON. For the 3,664-byte answer the last prefix byte
+is displayed as `L`, which is `0x4C`: the prefix `00 00 0E 4C` is 3,660, the length of the JSON
+that follows.
 
 **4. Long answers arrive in several TCP segments.** The 3,664-byte answer to the long prompt
 was sent as three segments of 1,460, 1,460 and 744 bytes; 1,460 is the MSS announced in the
@@ -214,6 +217,11 @@ until all bytes have arrived.
 answer and the shared token are visible to anyone who can capture the traffic (Wireshark:
 right-click a packet, Follow, TCP Stream). The token only keeps unwanted peers from using the
 service; it does not protect the content. See the limitations below.
+
+![Follow TCP Stream in Wireshark: the request with the prompt and token, and the answer](docs/follow-tcp-stream.png)
+
+The answer also carries `elapsed_ms: 68116`, the server's own measurement of the Ollama call,
+which agrees with the 68.1 s gap seen in the capture.
 
 **6. Comparing the two answers exposes mistakes.** For the long prompt, both small models
 made factual errors about TCP, and different ones. The llama answer says `SYN` stands for
