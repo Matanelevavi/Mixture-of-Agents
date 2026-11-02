@@ -35,10 +35,11 @@ def _local(ollama: OllamaClient, prompt: str, model: Optional[str], node: str) -
 
 
 def _remote(host: str, port: int, prompt: str, model: Optional[str],
-            token: Optional[str], timeout: float) -> Answer:
+            token: Optional[str], timeout: float, avoid: Optional[str]) -> Answer:
     started = time.perf_counter()
     try:
-        result = ask_peer(host, port, prompt, model=model, token=token, timeout=timeout)
+        result = ask_peer(host, port, prompt, model=model, token=token,
+                          timeout=timeout, avoid_model=avoid)
         return Answer("peer", result.node, True, result.model, result.text,
                       elapsed_s=time.perf_counter() - started)
     except PeerError as exc:
@@ -56,13 +57,27 @@ def ask_both(
     token: Optional[str] = None,
     timeout: float = 300.0,
     node_name: str = "local",
+    diverse: bool = False,
 ) -> Tuple[Answer, Answer]:
     """Send `prompt` to the local Ollama and to the peer in parallel.
 
     Total wait time is max(local, peer) rather than local + peer. A failure
     on one side never hides the answer from the other side.
+
+    diverse=True: if no peer model was requested, tell the peer which model
+    answers locally, so it can pick a different one. This needs the local
+    model name BEFORE the parallel step: one quick local /api/tags call.
     """
+    avoid = None
+    if diverse and not peer_model:
+        try:
+            local_model = ollama.resolve_model(local_model)
+            avoid = local_model
+        except OllamaError:
+            pass  # local Ollama is down; _local below reports it as usual
+
     with ThreadPoolExecutor(max_workers=2) as pool:
         local_future = pool.submit(_local, ollama, prompt, local_model, node_name)
-        peer_future = pool.submit(_remote, peer_host, peer_port, prompt, peer_model, token, timeout)
+        peer_future = pool.submit(_remote, peer_host, peer_port, prompt,
+                                  peer_model, token, timeout, avoid)
         return local_future.result(), peer_future.result()

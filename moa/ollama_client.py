@@ -26,6 +26,19 @@ class OllamaError(Exception):
     """Ollama could not be reached or returned an error."""
 
 
+def same_model(a: str, b: str) -> bool:
+    """Compare model names the way Ollama does: no tag means ':latest'.
+
+    /api/tags reports 'llama3.2:latest', while a user may type 'llama3.2'.
+    Both refer to the same model.
+    """
+    def normalize(name: str) -> str:
+        name = name.strip().lower()
+        return name if ":" in name else name + ":latest"
+
+    return normalize(a) == normalize(b)
+
+
 @dataclass
 class Generation:
     text: str
@@ -70,17 +83,29 @@ class OllamaClient:
         reply = self._request("GET", "/api/tags")
         return [m["name"] for m in reply.get("models", []) if "name" in m]
 
-    def resolve_model(self, preferred: Optional[str]) -> str:
-        """Use the requested model, or fall back to the first installed one."""
+    def resolve_model(self, preferred: Optional[str], avoid: Optional[str] = None) -> str:
+        """Pick the model to run.
+
+        1. An explicitly requested model always wins.
+        2. Otherwise the first installed model that is NOT `avoid`
+           (used so the two machines answer with different models).
+        3. If every installed model equals `avoid`, use it anyway: a
+           second answer from the same model is better than no answer.
+        """
         if preferred:
             return preferred
         models = self.list_models()
         if not models:
             raise OllamaError("no models are installed. Run e.g. `ollama pull llama3.2` first")
+        if avoid:
+            for name in models:
+                if not same_model(name, avoid):
+                    return name
         return models[0]
 
-    def generate(self, prompt: str, model: Optional[str] = None) -> Generation:
-        name = self.resolve_model(model)
+    def generate(self, prompt: str, model: Optional[str] = None,
+                 avoid: Optional[str] = None) -> Generation:
+        name = self.resolve_model(model, avoid)
         started = time.perf_counter()
         reply = self._request(
             "POST",

@@ -15,7 +15,12 @@ Message types (all carry "v": PROTOCOL_VERSION and "type"):
 
     prompt  (asker -> answerer)
         {"v": 1, "type": "prompt", "id": "<uuid>", "prompt": "...",
-         "model": "<name>" | null, "token": "<shared secret>" | null}
+         "model": "<name>" | null, "avoid_model": "<name>" | null,
+         "token": "<shared secret>" | null}
+
+        avoid_model (optional): when no model is requested, the answerer
+        prefers an installed model other than this one, so the two answers
+        come from different models. Older peers simply ignore the field.
 
     answer  (answerer -> asker), success
         {"v": 1, "type": "answer", "id": "<same uuid>", "ok": true,

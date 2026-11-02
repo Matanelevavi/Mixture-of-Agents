@@ -100,6 +100,7 @@ Useful options:
 |---|---|
 | `--model NAME` | Model on this machine (default: first installed model) |
 | `--peer-model NAME` | Ask the other machine to use a specific model (default: its own) |
+| `--diverse` | Ask the other machine to answer with a different model than this one, if it has one |
 | `--json` | Print both answers as JSON (for scripts) |
 | `--serve` (with `ask`) | Also answer the other machine, so both users can ask each other |
 | `--ollama URL` | Ollama address if not `http://127.0.0.1:11434` |
@@ -127,13 +128,28 @@ TCP is a byte stream with no message boundaries, so every message is framed as a
 4-byte big-endian length followed by that many bytes of UTF-8 JSON.
 
 ```
-prompt  A -> B   {"v":1, "type":"prompt", "id":"<uuid>", "prompt":"...", "model":null, "token":"..."}
+prompt  A -> B   {"v":1, "type":"prompt", "id":"<uuid>", "prompt":"...", "model":null, "avoid_model":null, "token":"..."}
 answer  B -> A   {"v":1, "type":"answer", "id":"<uuid>", "ok":true,  "node":"B", "model":"qwen2.5", "answer":"...", "elapsed_ms":6800}
                  {"v":1, "type":"answer", "id":"<uuid>", "ok":false, "node":"B", "error":"..."}
 ```
 
 One TCP connection carries one request and one reply. The `id` lets A verify that
 the reply belongs to its request; `v` allows the protocol to evolve.
+
+### Different models on each side (`--diverse`)
+
+Two answers from the same model compare poorly, so with `--diverse` machine A first
+resolves its own model (one quick local `/api/tags` call) and sends its name as
+`avoid_model`. Machine B then chooses, in order:
+
+1. the model A asked for explicitly (`--peer-model`),
+2. B's own pinned model (`serve --model`),
+3. the first installed model that differs from `avoid_model`,
+4. if B has no other model, the same one; A prints a note saying so.
+
+Model names are compared the way Ollama treats them: `llama3.2` equals `llama3.2:latest`.
+`avoid_model` is optional, so peers running the earlier version simply ignore it and
+the protocol version did not need to change.
 
 ## Design decisions
 

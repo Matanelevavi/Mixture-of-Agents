@@ -93,8 +93,15 @@ class PeerServer:
             prompt = self._validate(request)
             self.log(f"[serve] prompt from {who} ({len(prompt)} chars), running on local Ollama...")
 
+            # Model choice on this side: the asker's explicit request, else this
+            # server's own --model, else the first installed model that differs
+            # from the asker's model (avoid_model, sent with --diverse).
             started = time.perf_counter()
-            result = self.ollama.generate(prompt, request.get("model") or self.model)
+            result = self.ollama.generate(
+                prompt,
+                request.get("model") or self.model,
+                avoid=request.get("avoid_model"),
+            )
             elapsed_ms = int((time.perf_counter() - started) * 1000)
 
             send_message(sock, {
@@ -123,6 +130,9 @@ class PeerServer:
         prompt = request.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
             raise ProtocolError("prompt must be a non-empty string")
+        for field in ("model", "avoid_model"):
+            if request.get(field) is not None and not isinstance(request.get(field), str):
+                raise ProtocolError(f"{field} must be a string or null")
         return prompt
 
     def _try_send_error(self, sock: socket.socket, request_id, error: str) -> None:
@@ -154,11 +164,12 @@ def ask_peer(
     model: Optional[str] = None,
     token: Optional[str] = None,
     timeout: float = 300.0,
+    avoid_model: Optional[str] = None,
 ) -> PeerAnswer:
     request_id = str(uuid.uuid4())
     request = {
         "v": PROTOCOL_VERSION, "type": "prompt", "id": request_id,
-        "prompt": prompt, "model": model, "token": token,
+        "prompt": prompt, "model": model, "avoid_model": avoid_model, "token": token,
     }
     try:
         with socket.create_connection((host, port), timeout=CONNECT_TIMEOUT_S) as sock:

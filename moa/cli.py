@@ -16,7 +16,7 @@ import sys
 from typing import List, Optional, Tuple
 
 from .core import Answer, ask_both
-from .ollama_client import DEFAULT_OLLAMA_URL, OllamaClient
+from .ollama_client import DEFAULT_OLLAMA_URL, OllamaClient, same_model
 from .peer import DEFAULT_PEER_PORT, PeerServer
 
 RULE = "=" * 72
@@ -62,6 +62,8 @@ def _build_parser() -> argparse.ArgumentParser:
                      help=f"address of the other machine (port default: {DEFAULT_PEER_PORT})")
     ask.add_argument("--peer-model", default=None,
                      help="model to request on the other machine (default: its own default)")
+    ask.add_argument("--diverse", action="store_true",
+                     help="ask the other machine to answer with a different model than this one, if it has one")
     ask.add_argument("--json", action="store_true", help="print both answers as JSON")
     ask.add_argument("--serve", action="store_true",
                      help="also answer prompts from the other machine while this one asks")
@@ -92,13 +94,22 @@ def _run_once(args, ollama: OllamaClient, prompt: str) -> bool:
         prompt, ollama, host, port,
         local_model=args.model, peer_model=args.peer_model,
         token=args.token, timeout=args.timeout, node_name=args.name,
+        diverse=args.diverse,
     )
+    note = None
+    if args.diverse and local.ok and remote.ok and same_model(local.model, remote.model):
+        note = f"the other machine has no model other than {remote.model}, so both answers used it"
+
     if args.json:
-        print(json.dumps({"prompt": prompt, "local": local.to_dict(), "peer": remote.to_dict()},
-                         ensure_ascii=False, indent=2))
+        result = {"prompt": prompt, "local": local.to_dict(), "peer": remote.to_dict()}
+        if note:
+            result["note"] = note
+        print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
         _print_answer(f"Answer 1 - this machine ({local.node})", local)
         _print_answer(f"Answer 2 - other machine ({remote.node})", remote)
+        if note:
+            print(f"Note: {note}\n")
     return local.ok and remote.ok
 
 
