@@ -78,21 +78,9 @@ python -m moa ask --peer 192.168.1.20 --token <shared-secret> "Explain TCP vs UD
 python -m moa ask --peer 192.168.1.20 --token <shared-secret>
 ```
 
-Output:
+Output of a real run on two machines (`--diverse`, a different model on each side):
 
-```
-========================================================================
-Answer 1 - this machine (machine-A)
-model: llama3.2 | time: 4.2s
-========================================================================
-...
-
-========================================================================
-Answer 2 - other machine (machine-B)
-model: qwen2.5 | time: 6.8s
-========================================================================
-...
-```
+![Output of moa ask: one answer from each machine, with model and time](docs/example-output.png)
 
 Useful options:
 
