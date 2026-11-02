@@ -160,9 +160,18 @@ def _cmd_ask(args, ollama: OllamaClient) -> int:
 def main(argv: Optional[List[str]] = None) -> int:
     # Model answers may contain characters the console encoding cannot show
     # (e.g. Hebrew on a legacy Windows console); replace them instead of crashing.
+    #
+    # When output goes to a pipe or a file (`--json > out.json`), Python uses the
+    # system code page by default (cp1255 for Hebrew Windows, not UTF-8), so the
+    # same text would be written differently on different machines. JSON must be
+    # UTF-8, so in that case we force it. An interactive console keeps its own
+    # handling, which already supports Unicode.
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
-            stream.reconfigure(errors="replace")
+            if stream.isatty():
+                stream.reconfigure(errors="replace")
+            else:
+                stream.reconfigure(encoding="utf-8", errors="replace")
 
     args = _build_parser().parse_args(argv)
     ollama = OllamaClient(args.ollama, timeout=args.timeout)

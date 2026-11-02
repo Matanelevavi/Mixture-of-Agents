@@ -95,6 +95,17 @@ class EndToEndTests(unittest.TestCase):
         self.assertFalse(missing.ok)
         self.assertTrue(right.ok, right.error)
 
+    def test_cli_json_output_is_utf8_even_with_a_legacy_default_encoding(self):
+        # On Hebrew Windows the default encoding of a pipe is cp1255, not UTF-8.
+        # PYTHONIOENCODING reproduces that on any system.
+        env = dict(os.environ, PYTHONPATH=ROOT, PYTHONIOENCODING="cp1255")
+        cmd = [sys.executable, "-m", "moa", "ask", "--ollama", self.ollama_a.url,
+               "--peer", f"127.0.0.1:{self.server_b.address[1]}", "--json", "שלום"]
+        result = subprocess.run(cmd, capture_output=True, env=env, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        data = json.loads(result.stdout.decode("utf-8"))  # must be valid UTF-8
+        self.assertEqual(data["local"]["text"], "[A/llama3.2] שלום")
+
     def test_cli_json_output(self):
         env = dict(os.environ, PYTHONPATH=ROOT)
         cmd = [sys.executable, "-m", "moa", "ask", "--ollama", self.ollama_a.url,
