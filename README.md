@@ -202,7 +202,11 @@ differs, and qwen wrote about twice as many words (515 vs 278) in the second run
 handshake, the request (194 bytes of payload), an ACK, the answer (550 bytes), and the
 connection teardown, started by the server right after it sends the answer. The payload
 sizes equal the 4-byte length prefix plus the JSON computed from the code (190 + 4 = 194 for
-the request). In Wireshark's "Follow TCP Stream" the prefix shows up as non-printable
+the request).
+
+![Packet list of the short exchange: handshake, request, answer, teardown](docs/capture-short-exchange.png)
+
+In Wireshark's "Follow TCP Stream" the prefix shows up as non-printable
 characters right before the `{` of the JSON. For the 3,664-byte answer the last prefix byte
 is displayed as `L`, which is `0x4C`: the prefix `00 00 0E 4C` is 3,660, the length of the JSON
 that follows.
@@ -212,6 +216,8 @@ was sent as three segments of 1,460, 1,460 and 744 bytes; 1,460 is the MSS annou
 `SYN` packet. A receiver therefore cannot assume that one `recv()` returns a whole message,
 which is why `recv_message` reads the 4-byte length first and then loops in `_recv_exact`
 until all bytes have arrived.
+
+![Packet list of the long answer: three data segments of 1,460, 1,460 and 744 bytes](docs/capture-long-answer.png)
 
 **5. Everything is readable on the wire.** The request is plain JSON, so the prompt, the
 answer and the shared token are visible to anyone who can capture the traffic (Wireshark:
