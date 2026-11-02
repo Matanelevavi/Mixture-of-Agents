@@ -106,7 +106,7 @@ Useful options:
 | `--ollama URL` | Ollama address if not `http://127.0.0.1:11434` |
 | `--timeout SEC` | Max wait for a model answer (default 300) |
 
-The token can also be set with the `MOA_TOKEN` environment variable. Exit code is `0` when both
+The token can also be set with the `MOA_TOKEN` environment variable (PowerShell: `$env:MOA_TOKEN = "..."`). Exit code is `0` when both
 answers arrived and `1` otherwise.
 
 ### Trying it on a single computer
@@ -175,6 +175,59 @@ The tests replace Ollama with a small fake HTTP server (`tests/fake_ollama.py`),
 run anywhere without a model. They cover framing (split and merged TCP reads, truncated
 and oversized messages), the full two-peer flow, parallel execution, peer down,
 local Ollama down, unknown model, token enforcement and the CLI's JSON output.
+
+## Findings from a real two-machine run
+
+Setup: two Windows PCs on the same home Wi-Fi (`192.168.10.6` asks, `192.168.10.7` serves),
+each with its own Ollama. `--diverse` made them answer with different models
+(`llama3.2:1b` on the asker, `qwen2.5:1.5b` on the server). Traffic was captured with
+Wireshark on the server (`tcp.port == 5005`).
+
+**1. The two sides really run in parallel.**
+
+| Prompt | Asker (llama3.2:1b) | Server (qwen2.5:1.5b) | Wall time of the command |
+|---|---|---|---|
+| "Explain TCP vs UDP in two sentences" | 6.2 s | 13.0 s | about 13 s |
+| "Write about 300 words on how TCP works" | 18.5 s | 68.2 s | about 68 s |
+
+The command takes as long as the slower side, not the sum. The numbers are not a model
+benchmark: each machine ran the prompt once (so model loading is included), the hardware
+differs, and qwen wrote about twice as many words (515 vs 278) in the second run.
+
+**2. The network is not the bottleneck.** The TCP handshake shows a round trip of roughly
+14-19 ms. In the capture, the gap between the request and the first byte of the answer is
+68.1 s for the long prompt, which matches the 68.2 s the program reported. All of that is inference.
+
+**3. The wire format matches the protocol.** A short exchange is 10 packets: three-way
+handshake, the request (194 bytes of payload), an ACK, the answer (550 bytes), and the
+connection teardown, started by the server right after it sends the answer. The payload
+sizes equal the 4-byte length prefix plus the JSON computed from the code (190 + 4 = 194 for
+the request).
+
+**4. Long answers arrive in several TCP segments.** The 3,664-byte answer to the long prompt
+was sent as three segments of 1,460, 1,460 and 744 bytes; 1,460 is the MSS announced in the
+`SYN` packet. A receiver therefore cannot assume that one `recv()` returns a whole message,
+which is why `recv_message` reads the 4-byte length first and then loops in `_recv_exact`
+until all bytes have arrived.
+
+**5. Everything is readable on the wire.** The request is plain JSON, so the prompt, the
+answer and the shared token are visible to anyone who can capture the traffic (Wireshark:
+right-click a packet, Follow, TCP Stream). The token only keeps unwanted peers from using the
+service; it does not protect the content. See the limitations below.
+
+**6. Comparing the two answers exposes mistakes.** For the long prompt, both small models
+made factual errors about TCP, and different ones. The llama answer says `SYN` stands for
+"Send Unencrypted" and that TCP uses 1,512-byte segments (the capture shows 1,460). The qwen
+answer says TCP authenticates with a username and password and mentions NAKs, which TCP does
+not have. Neither answer alone shows this; the disagreement between them does. This is one
+prompt and two very small models, so it is an observation and not a measurement, but it is the
+reason a third step that compares and merges the answers (the Mixture-of-Agents idea) is the
+natural next step.
+
+**7. Running on a real second machine found a bug the tests missed.** On Hebrew Windows,
+output written to a pipe uses the cp1255 code page, so `ask --json` produced JSON that was not
+valid UTF-8. The tests had passed on Linux. The CLI now forces UTF-8 when output is not a
+console, and a regression test simulates the legacy encoding.
 
 ## Limitations and possible next steps
 
