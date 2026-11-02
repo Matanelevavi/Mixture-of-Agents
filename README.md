@@ -254,4 +254,4 @@ console, and a regression test simulates the legacy encoding.
 
 ## Note on how this was built
 
-The code was written with an AI assistant (Claude) from my description of the task. I ran and measured the system on two physical Windows computers, captured the traffic with Wireshark, and checked the results described below. I reviewed the code and can explain it.
+The code was written with an AI assistant (Claude). I ran and measured the system on two physical Windows computers, captured the traffic with Wireshark, and checked the results described below. I reviewed the code and can explain it.
