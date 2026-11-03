@@ -217,14 +217,13 @@ service; it does not protect the content. See the limitations below.
 The answer also carries `elapsed_ms: 68116`, the server's own measurement of the Ollama call,
 which agrees with the 68.1 s gap seen in the capture.
 
-**6. Comparing the two answers exposes mistakes.** For the long prompt, both small models
-made factual errors about TCP, and different ones. The llama answer says `SYN` stands for
-"Send Unencrypted" and that TCP uses 1,512-byte segments (the capture shows 1,460). The qwen
-answer says TCP authenticates with a username and password and mentions NAKs, which TCP does
-not have. Neither answer alone shows this; the disagreement between them does. This is one
-prompt and two very small models, so it is an observation and not a measurement, but it is the
-reason a third step that compares and merges the answers (the Mixture-of-Agents idea) is the
-natural next step.
+**6. Both small models made factual errors about TCP, different ones.** For the long prompt,
+the llama answer says `SYN` stands for "Send Unencrypted" and that TCP uses 1,512-byte
+segments (the capture shows 1,460). The qwen answer says TCP authenticates with a username and
+password and mentions NAKs, which TCP does not have. These errors were found by checking each
+answer by hand against the TCP specification and the capture of the same run; the system itself
+does not detect them. Comparing the two answers only shows where they differ, not which one is
+right. This is one prompt and two very small models, so it is an observation, not a measurement.
 
 **7. Running on a real second machine found a bug the tests missed.** On Hebrew Windows,
 output written to a pipe uses the cp1255 code page, so `ask --json` produced JSON that was not
