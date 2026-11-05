@@ -364,43 +364,43 @@ console, and a regression test simulates the legacy encoding.
 
 Setup: the same two Windows PCs. Machine A (`192.168.10.6`) ran `qwen2.5:7b`, machine B
 (`192.168.10.7`) ran `llama3.2:3b`; `ollama show` lists `tools` for both. Each shared folder held
-one or two short test files. Every result below is from one to three runs, so these are
+one or two short test files. Every result below is from one to four runs, so these are
 observations, not reliability measurements. The models also differ in size and run on different
 hardware, so a difference between A and B cannot be attributed to the model alone.
 
 **Channel ①, local MCP.** On each machine, asked which files are in the shared folder and what the
 file says, the model called `list_files` and then `read_file`, and quoted the file correctly
-(one run each). Asked on A to read `..\secret.txt`, the model called `read_file` with that path and
-the files server refused it as outside the shared folder. No such file existed there, so this run
+(two runs on A, one on B). Asked on A to read `..\secret.txt` (two runs), the model called `read_file`
+with that path and the files server refused it as outside the shared folder. No such file existed there, so this
 shows the path check, not the protection of a real file (that case is covered by the automated tests).
 
 **Channel ③, agent to agent: B's small model invented a file's content.**
 
 | Prompt | Tool calls on B | B's answer |
 |---|---|---|
-| "List the files you can see and read the one you find. Then tell me what it says." (2 runs) | `list_files` only | Quoted a text that is not in the file, a different one each run |
-| "Use the read_file tool to read b_notes.txt and tell me exactly what it says." (1 run) | `read_file` | The file's real content |
+| "List the files you can see and read the one you find. Then tell me what it says." (3 runs) | `list_files` only | Quoted a text that is not in the file, a different one each run |
+| "Use the read_file tool to read b_notes.txt and tell me exactly what it says." (2 runs) | `read_file` | The file's real content |
 
-In the first two runs `read_file` was offered to B's model and allowed for remote prompts; the
+In the runs with the general prompt `read_file` was offered to B's model and allowed for remote prompts; the
 model did not call it. For the first run, B's server log shows the same single call as the tool
 record that came back over the protocol. The invented text was found by comparing the answer with the file by hand; the
 system does not detect it. What the system does provide is the record of tool calls, which showed
-that the file was never read. A's model answered correctly in all three runs (in the last one it
+that the file was never read. A's model answered correctly in all five runs (with the explicit prompt it
 reported that `b_notes.txt` does not exist on A, which is true).
 
 **Channel ②, remote MCP over HTTP.**
 
 | Case | Result |
 |---|---|
-| Valid token, read `hello_b.txt` (3 runs) | `pc_b_files__read_file ... ok`, content quoted correctly |
-| Wrong token (2 runs) | HTTP 401 (in the capture of the first run, on both of its requests); the answer carries `warning: MCP server 'pc_b_files' unavailable: ... refused the token (HTTP 401)` |
-| Valid token, read `..\shared\b_notes.txt` (1 run) | Refused by B's server as outside its folder; the file's content was not returned |
+| Valid token, read `hello_b.txt` (4 runs) | `pc_b_files__read_file ... ok`, content quoted correctly |
+| Wrong token (3 runs) | HTTP 401 (in the capture of the first run, on both of its requests); the answer carries `warning: MCP server 'pc_b_files' unavailable: ... refused the token (HTTP 401)` |
+| Valid token, read `..\shared\b_notes.txt` (2 runs) | Refused by B's server as outside its folder; the file's content was not returned |
 
 With the wrong token, A's model then called its **local** `read_file` for `hello_b.txt`, which
 failed, and answered that the file could not be found. That is misleading: the file exists on B.
 The model had been told in a system message that `pc_b_files` was unavailable and why; after the
 first run the message was made more explicit ("do not conclude that a file does not exist"), and
-the second run gave the same kind of answer. The warning line is printed by the code, not written
+the two later runs gave the same kind of answer. The warning line is printed by the code, not written
 by the model, so it is the reliable part of the output.
 
 **What the capture shows (Wireshark, `tcp.port == 8000`, Follow TCP Stream).** One question with a
