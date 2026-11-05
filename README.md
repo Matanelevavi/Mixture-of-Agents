@@ -407,6 +407,8 @@ text in clear text, together with `"isError": false`. The capture also showed th
 started with `﻿`, a byte order mark written by Windows PowerShell 5 (`Set-Content -Encoding
 utf8`); `read_file` now strips it.
 
+![Follow TCP Stream of one remote MCP question: server/discover, tools/list and tools/call, with the token and file text in clear text (token and IP redacted here)](docs/mcp-follow-tcp-stream.png)
+
 **Conclusion.** The connections, the token check, the path check and the allowlists behaved as
 designed in every run. The weak point was the models: with a general prompt, the small model on B
 answered about a file it had not read, and A's model drew a wrong conclusion from a missing server.
