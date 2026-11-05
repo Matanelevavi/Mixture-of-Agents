@@ -188,8 +188,10 @@ the other machine's files server would offer the same names and the model could 
 
 ```bash
 pip install -r requirements.txt
-ollama pull llama3.2:3b      # a model with tool support; very small models are less reliable with tools
+ollama pull qwen2.5:7b       # a model with tool support (`ollama show <model>` lists "tools")
 ```
+
+In the real run below, machine A used `qwen2.5:7b` and machine B `llama3.2:3b`.
 
 ### ① and ③: local tools, and agent to agent
 
@@ -217,11 +219,12 @@ mkdir public                     # test files only, nothing sensitive
 python -m moa.servers.files --root public --http 192.168.10.7:8000
 ```
 
-On A, use `moa.remote-example.json` (set B's address in `url`), set the same token in
-`MOA_MCP_TOKEN`, and ask without `--peer`; only A's model answers, using its own and B's tools:
+On A, copy `moa.remote-example.json` to `moa.remote.json` (set B's address in `url`), set the same
+token in `MOA_MCP_TOKEN`, and ask without `--peer`; only A's model answers, using its own and B's
+tools:
 
 ```bash
-python -m moa ask --config moa.json "What is in the shared folder of pc_b?"
+python -m moa ask --config moa.remote.json "Use the pc_b_files__read_file tool to read hello_b.txt."
 ```
 
 `moa.json` never contains the token itself, only the name of the variable that holds it
@@ -265,8 +268,9 @@ Automated tests cover the agent loop, the files server over stdio and over HTTP,
 channels, using a scripted fake model and the real MCP servers: `tests/test_agent.py`,
 `tests/test_files_http.py` (authentication and host checks against a running HTTP server) and
 `tests/test_agent_remote.py` (one answer using a local and a remote tool, wrong or missing token,
-unreachable server, allowlists). It has **not yet been run with a real model on two machines**; how
-well small local models choose and call tools is still to be measured.
+unreachable server, allowlists). The fake model shows that the code works; it says nothing about
+how well a real model uses tools. For that, see
+[Findings from a real run of agent mode](#findings-from-a-real-run-of-agent-mode).
 
 Design note: local MCP servers are started for each prompt and remote ones are connected for each
 prompt, then closed. This is simple and keeps requests independent, at the cost of starting a process
@@ -352,10 +356,66 @@ output written to a pipe uses the cp1255 code page, so `ask --json` produced JSO
 valid UTF-8. The tests had passed on Linux. The CLI now forces UTF-8 when output is not a
 console, and a regression test simulates the legacy encoding.
 
+## Findings from a real run of agent mode
+
+Setup: the same two Windows PCs. Machine A (`192.168.10.6`) ran `qwen2.5:7b`, machine B
+(`192.168.10.7`) ran `llama3.2:3b`; `ollama show` lists `tools` for both. Each shared folder held
+one or two short test files. Every result below is from one to three runs, so these are
+observations, not reliability measurements. The models also differ in size and run on different
+hardware, so a difference between A and B cannot be attributed to the model alone.
+
+**Channel ①, local MCP.** On each machine, asked which files are in the shared folder and what the
+file says, the model called `list_files` and then `read_file`, and quoted the file correctly
+(one run each). Asked on A to read `..\secret.txt`, the model called `read_file` with that path and
+the files server refused it as outside the shared folder. No such file existed there, so this run
+shows the path check, not the protection of a real file (that case is covered by the automated tests).
+
+**Channel ③, agent to agent: B's small model invented a file's content.**
+
+| Prompt | Tool calls on B | B's answer |
+|---|---|---|
+| "List the files you can see and read the one you find. Then tell me what it says." (2 runs) | `list_files` only | Quoted a text that is not in the file, a different one each run |
+| "Use the read_file tool to read b_notes.txt and tell me exactly what it says." (1 run) | `read_file` | The file's real content |
+
+In the first two runs `read_file` was offered to B's model and allowed for remote prompts; the
+model did not call it. For the first run, B's server log shows the same single call as the tool
+record that came back over the protocol. The invented text was found by comparing the answer with the file by hand; the
+system does not detect it. What the system does provide is the record of tool calls, which showed
+that the file was never read. A's model answered correctly in all three runs (in the last one it
+reported that `b_notes.txt` does not exist on A, which is true).
+
+**Channel ②, remote MCP over HTTP.**
+
+| Case | Result |
+|---|---|
+| Valid token, read `hello_b.txt` (3 runs) | `pc_b_files__read_file ... ok`, content quoted correctly |
+| Wrong token (2 runs) | HTTP 401 (in the capture of the first run, on both of its requests); the answer carries `warning: MCP server 'pc_b_files' unavailable: ... refused the token (HTTP 401)` |
+| Valid token, read `..\shared\b_notes.txt` (1 run) | Refused by B's server as outside its folder; the file's content was not returned |
+
+With the wrong token, A's model then called its **local** `read_file` for `hello_b.txt`, which
+failed, and answered that the file could not be found. That is misleading: the file exists on B.
+The model had been told in a system message that `pc_b_files` was unavailable and why; after the
+first run the message was made more explicit ("do not conclude that a file does not exist"), and
+the second run gave the same kind of answer. The warning line is printed by the code, not written
+by the model, so it is the reliable part of the output.
+
+**What the capture shows (Wireshark, `tcp.port == 8000`, Follow TCP Stream).** One question with a
+valid token was three `POST /mcp` requests on one connection, with headers `mcp-method:
+server/discover`, `tools/list` and `tools/call` (`mcp-name: read_file`). Every request carries
+`Authorization: Bearer <token>` in clear text, and the answer to `tools/call` contains the file's
+text in clear text, together with `"isError": false`. The capture also showed that the file text
+started with `﻿`, a byte order mark written by Windows PowerShell 5 (`Set-Content -Encoding
+utf8`); `read_file` now strips it.
+
+**Conclusion.** The connections, the token check, the path check and the allowlists behaved as
+designed in every run. The weak point was the models: with a general prompt, the small model on B
+answered about a file it had not read, and A's model drew a wrong conclusion from a missing server.
+In both cases the evidence was in the tool record and the warning line, not in the model's text.
+
 ## Limitations and possible next steps
 
 * The token is sent in clear text. On an untrusted network, run over a VPN (Tailscale/WireGuard)
-  or add TLS (`ssl.wrap_socket` on both sides).
+  or add TLS (an `ssl.SSLContext` wrapping the socket on both sides; HTTPS for the MCP server).
 * Answers are returned when complete; streaming tokens as they are generated would need
   streaming frames in the protocol.
 * Extends naturally to N peers (`--peer` repeated) and to a final step where a model
@@ -363,4 +423,4 @@ console, and a regression test simulates the legacy encoding.
 
 ## Note on how this was built
 
-The code was written with an AI assistant (Claude). I ran and measured the system on two physical Windows computers, captured the traffic with Wireshark, and checked the results described below. I reviewed the code and can explain it.
+The code was written with an AI assistant (Claude). I ran and measured the system on two physical Windows computers, captured the traffic with Wireshark, and checked the results described above. I reviewed the code and can explain it.
