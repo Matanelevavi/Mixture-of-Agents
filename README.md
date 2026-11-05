@@ -171,12 +171,7 @@ or at the same time:
 | ② Remote MCP | Streamable HTTP + bearer token | **A's model, on tools that B exposes** (no model on B) | MCP messages (`tools/list`, `tools/call`) |
 | ③ Agent to agent | the TCP protocol above | B's model, on B's tools, within B's allowlist | a prompt and an answer |
 
-```
-                 machine A                                          machine B
- model A <-> agent A --① stdio--> files server (shared/)
-                    |--② MCP over HTTP + token ------------------> files server (public/), port 8000
-                    `--③ TCP: prompt / answer -------------------> agent B --① stdio--> files server (shared/)
-```
+![Architecture: two clients, each with Ollama, an agent (MCP client) and a files MCP server; channel 1 over stdio inside each machine, channel 2 from A's agent to B's HTTP files server, channel 3 between the two agents over TCP](docs/architecture.png)
 
 The model never talks to an MCP server. The agent loop (`moa/agent/loop.py`) does: it connects to every configured
 server, lists its tools (`tools/list`), sends their descriptions to the model with Ollama's
