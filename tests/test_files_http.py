@@ -19,6 +19,10 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import httpx2
+from mcp import Client
+from mcp.client.streamable_http import streamable_http_client
+
 ROOT = Path(__file__).resolve().parent.parent
 TOKEN = "test-token-0123456789abcdef"
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -103,10 +107,6 @@ class HttpServerTests(unittest.TestCase):
         self.assertEqual(status, 403)
 
     def test_full_mcp_session_with_token(self):
-        import httpx2
-        from mcp import Client
-        from mcp.client.streamable_http import streamable_http_client
-
         async def session():
             async with httpx2.AsyncClient(headers={"Authorization": f"Bearer {TOKEN}"}) as http:
                 url = f"http://127.0.0.1:{self.port}/mcp"
@@ -123,8 +123,6 @@ class HttpServerTests(unittest.TestCase):
         self.assertNotIn("TOP SECRET", escape_text)
 
     def test_mcp_session_without_token_is_refused(self):
-        from mcp import Client
-
         async def session():
             async with Client(f"http://127.0.0.1:{self.port}/mcp") as client:
                 await client.list_tools()

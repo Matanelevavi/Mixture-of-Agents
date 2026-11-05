@@ -9,7 +9,7 @@ from typing import List, Optional, Tuple
 
 from .agent import AgentConfig, AgentError, run_agent
 from .ollama_client import OllamaClient, OllamaError
-from .peer import PeerError, ask_peer
+from .peer_client import PeerError, ask_peer
 
 
 @dataclass

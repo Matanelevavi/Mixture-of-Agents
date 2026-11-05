@@ -45,6 +45,7 @@ import struct
 from typing import Any, Dict
 
 PROTOCOL_VERSION = 1
+DEFAULT_PEER_PORT = 5005
 
 # Upper bound for one frame. Protects the receiver from allocating an absurd
 # amount of memory because of a corrupt or malicious length prefix.

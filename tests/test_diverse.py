@@ -8,7 +8,7 @@ import unittest
 
 from moa.core import ask_both
 from moa.ollama_client import OllamaClient, same_model
-from moa.peer import PeerServer
+from moa.peer_server import PeerServer
 
 from .fake_ollama import FakeOllama
 

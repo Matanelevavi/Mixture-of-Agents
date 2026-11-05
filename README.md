@@ -7,8 +7,8 @@ at the same time, sends it over the network to **machine B**, where the same pro
 runs it on B's Ollama and sends the answer back. A prints both answers.
 
 There is no central server and no proxy in front of Ollama: just two identical peers.
-The basic mode uses only the Python standard library. Agent mode (each machine's model can use
-tools from MCP servers, see [Agent mode](#agent-mode-mcp-connectors)) needs the MCP SDK: `pip install -r requirements.txt`.
+In agent mode each machine's model can also use tools from MCP servers ("connectors"), see
+[Agent mode](#agent-mode-mcp-connectors).
 
 ## How it works
 
@@ -36,21 +36,24 @@ sequenceDiagram
 | File | Role |
 |---|---|
 | `moa/protocol.py` | Wire format between the peers: length-prefixed JSON over TCP |
-| `moa/ollama_client.py` | Calls the local Ollama REST API (`/api/tags`, `/api/generate`) |
-| `moa/peer.py` | `PeerServer` (answers prompts from the other machine) and `ask_peer` (sends a prompt to it) |
+| `moa/ollama_client.py` | Calls the local Ollama REST API (`/api/tags`, `/api/generate`, `/api/chat`) |
+| `moa/peer_server.py` | `PeerServer`: answers prompts from the other machine |
+| `moa/peer_client.py` | `ask_peer`: sends a prompt to the other machine and waits for the answer |
 | `moa/core.py` | `ask_both`: runs local and remote in parallel, collects both answers |
-| `moa/cli.py` | Command line: `serve` and `ask` |
-| `tests/` | Unit and end-to-end tests with a fake Ollama |
+| `moa/cli.py`, `moa/output.py` | Command line (`serve` and `ask`) and how answers are printed |
+| `moa/agent/` | Agent mode: `config.py` (moa.json), `connect.py` (MCP clients), `loop.py` (the agent loop) |
+| `moa/servers/files.py` | A small read-only MCP server that exposes one folder |
+| `tests/` | Unit and end-to-end tests with a fake Ollama and the real MCP servers |
 
 ## Requirements
 
-* Python 3.9+ on both machines (3.10+ for agent mode)
+* Python 3.10+ on both machines, and the dependencies: `pip install -r requirements.txt` (the official MCP SDK)
 * [Ollama](https://ollama.com) installed and running on both machines, with at least one model pulled, e.g. `ollama pull llama3.2`
 * The two machines can reach each other over the network (same LAN, or a VPN such as Tailscale)
 
 ## Running on two machines
 
-Copy (or `git clone`) this folder to both machines.
+Copy (or `git clone`) this folder to both machines and run `pip install -r requirements.txt` on each.
 
 **Machine B** (answers):
 
@@ -152,8 +155,9 @@ the protocol version did not need to change.
   shows its own answer and a clear error for B (and vice versa).
 * **Shared token**, compared in constant time (`hmac.compare_digest`).
 * **Bounded resources**: 16 MiB maximum message size, connect timeout, read timeouts.
-* **No dependencies in the basic mode**: `socket`, `socketserver`, `urllib`, `json`, `concurrent.futures`.
-  Agent mode adds the official MCP SDK (`mcp`), imported only when a config is given.
+* **One dependency**: the official MCP SDK (`mcp`), for agent mode. The peer protocol and the
+  Ollama client use only the standard library (`socket`, `socketserver`, `urllib`, `json`,
+  `concurrent.futures`).
 
 ## Agent mode (MCP connectors)
 
@@ -174,7 +178,7 @@ or at the same time:
                     `--③ TCP: prompt / answer -------------------> agent B --① stdio--> files server (shared/)
 ```
 
-The model never talks to an MCP server. `moa/agent.py` does: it connects to every configured
+The model never talks to an MCP server. The agent loop (`moa/agent/loop.py`) does: it connects to every configured
 server, lists its tools (`tools/list`), sends their descriptions to the model with Ollama's
 `/api/chat`, runs every tool the model asks for (`tools/call`), sends the result back, and repeats
 until the model answers without asking for a tool. Each answer lists the tool calls behind it, for
@@ -265,7 +269,7 @@ SDK requires point to the files server itself (they only appear in the metadata 
 ### What was tested
 
 Automated tests cover the agent loop, the files server over stdio and over HTTP, and all three
-channels, using a scripted fake model and the real MCP servers: `tests/test_agent.py`,
+channels, using a scripted fake model and the real MCP servers: `tests/test_agent.py`, `tests/test_agent_peer.py`,
 `tests/test_files_http.py` (authentication and host checks against a running HTTP server) and
 `tests/test_agent_remote.py` (one answer using a local and a remote tool, wrong or missing token,
 unreachable server, allowlists). The fake model shows that the code works; it says nothing about
@@ -288,7 +292,7 @@ run anywhere without a model. They cover framing (split and merged TCP reads, tr
 and oversized messages), the full two-peer flow, parallel execution, peer down,
 local Ollama down, unknown model, token enforcement and the CLI's JSON output.
 The agent-mode tests (described in [What was tested](#what-was-tested)) also start the real
-MCP servers, so they need `pip install -r requirements.txt`.
+MCP servers.
 
 ## Findings from a real two-machine run
 

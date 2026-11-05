@@ -14,18 +14,16 @@ the MCP servers (connectors) listed in that file.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import socket
-import sys
 from typing import List, Optional, Tuple
 
 from .agent import AgentConfig, AgentError
-from .core import Answer, ask_both, ask_local
+from .core import ask_both, ask_local
 from .ollama_client import DEFAULT_OLLAMA_URL, OllamaClient, same_model
-from .peer import DEFAULT_PEER_PORT, PeerServer
-
-RULE = "=" * 72
+from .output import configure_console, print_answer, print_json
+from .peer_server import PeerServer
+from .protocol import DEFAULT_PEER_PORT
 
 
 def _parse_peer(value: str) -> Tuple[str, int]:
@@ -82,44 +80,16 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _print_answer(title: str, answer: Answer) -> None:
-    print(RULE)
-    print(title)
-    if answer.ok:
-        print(f"model: {answer.model} | time: {answer.elapsed_s:.1f}s")
-        if answer.tools is not None:
-            print(f"tools: {_describe_tools(answer.tools)}")
-        for warning in answer.warnings or []:
-            print(f"warning: {warning}")
-        print(RULE)
-        print(answer.text.strip() if answer.text else "")
-    else:
-        print(f"ERROR after {answer.elapsed_s:.1f}s: {answer.error}")
-        print(RULE)
-    print()
-
-
-def _describe_tools(tools) -> str:
-    if not tools:
-        return "none used"
-    parts = []
-    for t in tools:
-        arguments = ", ".join(f"{k}={v!r}" for k, v in (t.get("arguments") or {}).items())
-        status = "ok" if t.get("ok") else f"FAILED ({t.get('error')})"
-        parts.append(f"{t.get('name')}({arguments}) {status}")
-    return "; ".join(parts)
-
-
-def _run_local_only(args, ollama: OllamaClient, prompt: str) -> bool:
+def _run_local_only(args: argparse.Namespace, ollama: OllamaClient, prompt: str) -> bool:
     local = ask_local(prompt, ollama, model=args.model, node_name=args.name, agent=args.agent)
     if args.json:
-        print(json.dumps({"prompt": prompt, "local": local.to_dict()}, ensure_ascii=False, indent=2))
+        print_json(prompt, local)
     else:
-        _print_answer(f"Answer - this machine ({local.node})", local)
+        print_answer(f"Answer - this machine ({local.node})", local)
     return local.ok
 
 
-def _run_once(args, ollama: OllamaClient, prompt: str) -> bool:
+def _run_once(args: argparse.Namespace, ollama: OllamaClient, prompt: str) -> bool:
     if args.peer is None:
         return _run_local_only(args, ollama, prompt)
     host, port = args.peer
@@ -136,19 +106,16 @@ def _run_once(args, ollama: OllamaClient, prompt: str) -> bool:
         note = f"the other machine has no model other than {remote.model}, so both answers used it"
 
     if args.json:
-        result = {"prompt": prompt, "local": local.to_dict(), "peer": remote.to_dict()}
-        if note:
-            result["note"] = note
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        print_json(prompt, local, remote, note)
     else:
-        _print_answer(f"Answer 1 - this machine ({local.node})", local)
-        _print_answer(f"Answer 2 - other machine ({remote.node})", remote)
+        print_answer(f"Answer 1 - this machine ({local.node})", local)
+        print_answer(f"Answer 2 - other machine ({remote.node})", remote)
         if note:
             print(f"Note: {note}\n")
     return local.ok and remote.ok
 
 
-def _cmd_serve(args, ollama: OllamaClient) -> int:
+def _cmd_serve(args: argparse.Namespace, ollama: OllamaClient) -> int:
     server = PeerServer(ollama, host=args.host, port=args.port, model=args.model,
                         token=args.token, node_name=args.name, agent=args.agent)
     host, port = server.address
@@ -168,7 +135,7 @@ def _cmd_serve(args, ollama: OllamaClient) -> int:
     return 0
 
 
-def _cmd_ask(args, ollama: OllamaClient) -> int:
+def _cmd_ask(args: argparse.Namespace, ollama: OllamaClient) -> int:
     server = None
     if args.serve:
         server = PeerServer(ollama, port=args.listen_port, model=args.model,
@@ -197,21 +164,7 @@ def _cmd_ask(args, ollama: OllamaClient) -> int:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    # Model answers may contain characters the console encoding cannot show
-    # (e.g. Hebrew on a legacy Windows console); replace them instead of crashing.
-    #
-    # When output goes to a pipe or a file (`--json > out.json`), Python uses the
-    # system code page by default (cp1255 for Hebrew Windows, not UTF-8), so the
-    # same text would be written differently on different machines. JSON must be
-    # UTF-8, so in that case we force it. An interactive console keeps its own
-    # handling, which already supports Unicode.
-    for stream in (sys.stdout, sys.stderr):
-        if hasattr(stream, "reconfigure"):
-            if stream.isatty():
-                stream.reconfigure(errors="replace")
-            else:
-                stream.reconfigure(encoding="utf-8", errors="replace")
-
+    configure_console()
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:
