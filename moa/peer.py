@@ -1,7 +1,9 @@
 """The two roles a peer can play.
 
 * PeerServer - "answerer": waits for prompts from the other machine, runs
-  them on THIS machine's Ollama and sends the answer back.
+  them on THIS machine's Ollama and sends the answer back. With an MCP
+  configuration it answers as an agent, limited to the tools that the
+  configuration allows for remote requests.
 * ask_peer   - "asker": sends a prompt to the other machine and waits for
   its answer.
 
@@ -19,8 +21,9 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Callable, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
+from .agent import AgentConfig, AgentError, run_agent
 from .ollama_client import OllamaClient, OllamaError
 from .protocol import PROTOCOL_VERSION, ProtocolError, recv_message, send_message
 
@@ -47,8 +50,10 @@ class PeerServer:
         token: Optional[str] = None,
         node_name: Optional[str] = None,
         log: Callable[[str], None] = print,
+        agent: Optional[AgentConfig] = None,
     ):
         self.ollama = ollama
+        self.agent = agent
         self.model = model
         self.token = token
         self.node_name = node_name or socket.gethostname()
@@ -97,20 +102,31 @@ class PeerServer:
             # server's own --model, else the first installed model that differs
             # from the asker's model (avoid_model, sent with --diverse).
             started = time.perf_counter()
-            result = self.ollama.generate(
-                prompt,
-                request.get("model") or self.model,
-                avoid=request.get("avoid_model"),
-            )
+            model = request.get("model") or self.model
+            tools = None
+            if self.agent is None:
+                result = self.ollama.generate(prompt, model, avoid=request.get("avoid_model"))
+            else:
+                # A prompt from the network may only use the tools listed in
+                # remoteAllowedTools; nothing else is even offered to the model.
+                result = run_agent(prompt, self.ollama, self.agent, model=model,
+                                   avoid=request.get("avoid_model"),
+                                   allowed_tools=self.agent.remote_allowed_tools)
+                tools = [t.to_dict() for t in result.tools_used]
+                for t in result.tools_used:
+                    self.log(f"[serve] tool {t.name}({t.arguments}) -> {'ok' if t.ok else 'refused/failed: ' + str(t.error)}")
             elapsed_ms = int((time.perf_counter() - started) * 1000)
 
-            send_message(sock, {
+            answer = {
                 "v": PROTOCOL_VERSION, "type": "answer", "id": request_id, "ok": True,
                 "node": self.node_name, "model": result.model,
                 "answer": result.text, "elapsed_ms": elapsed_ms,
-            })
+            }
+            if tools is not None:
+                answer["tools"] = tools
+            send_message(sock, answer)
             self.log(f"[serve] answered {who} with {result.model} in {elapsed_ms} ms")
-        except (ProtocolError, OllamaError, PermissionError) as exc:
+        except (ProtocolError, OllamaError, AgentError, PermissionError) as exc:
             self.log(f"[serve] request from {who} failed: {exc}")
             self._try_send_error(sock, request_id, str(exc))
         except OSError as exc:  # client vanished, timeout while reading, etc.
@@ -155,6 +171,7 @@ class PeerAnswer:
     model: str
     node: str
     elapsed_ms: int
+    tools: Optional[List[dict]] = None  # present when the peer answered as an agent
 
 
 def ask_peer(
@@ -194,4 +211,12 @@ def ask_peer(
         model=str(reply.get("model", "?")),
         node=str(reply.get("node", host)),
         elapsed_ms=int(reply.get("elapsed_ms", 0)),
+        tools=_tool_list(reply.get("tools")),
     )
+
+
+def _tool_list(value) -> Optional[List[dict]]:
+    """Keep the peer's tool record only if it has the expected shape."""
+    if not isinstance(value, list):
+        return None
+    return [t for t in value if isinstance(t, dict) and isinstance(t.get("name"), str)]

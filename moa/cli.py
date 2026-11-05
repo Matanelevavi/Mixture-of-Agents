@@ -4,6 +4,9 @@
     python -m moa ask --peer 192.168.1.20 "..."  # asker (machine A), one prompt
     python -m moa ask --peer 192.168.1.20        # asker, interactive session
     python -m moa ask --peer 192.168.1.20 --serve  # both roles at once (symmetric)
+
+Add --config moa.json to either command to answer as an agent that can use
+the MCP servers (connectors) listed in that file.
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ import socket
 import sys
 from typing import List, Optional, Tuple
 
+from .agent import AgentConfig, AgentError
 from .core import Answer, ask_both
 from .ollama_client import DEFAULT_OLLAMA_URL, OllamaClient, same_model
 from .peer import DEFAULT_PEER_PORT, PeerServer
@@ -49,6 +53,8 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="seconds to wait for a model answer (default: 300)")
     common.add_argument("--name", default=socket.gethostname(),
                         help="name this machine reports to the other side")
+    common.add_argument("--config", default=os.environ.get("MOA_CONFIG"),
+                        help="moa.json with MCP servers: answer as an agent that can use their tools (or env MOA_CONFIG)")
 
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -78,12 +84,25 @@ def _print_answer(title: str, answer: Answer) -> None:
     print(title)
     if answer.ok:
         print(f"model: {answer.model} | time: {answer.elapsed_s:.1f}s")
+        if answer.tools is not None:
+            print(f"tools: {_describe_tools(answer.tools)}")
         print(RULE)
         print(answer.text.strip() if answer.text else "")
     else:
         print(f"ERROR after {answer.elapsed_s:.1f}s: {answer.error}")
         print(RULE)
     print()
+
+
+def _describe_tools(tools) -> str:
+    if not tools:
+        return "none used"
+    parts = []
+    for t in tools:
+        arguments = ", ".join(f"{k}={v!r}" for k, v in (t.get("arguments") or {}).items())
+        status = "ok" if t.get("ok") else f"FAILED ({t.get('error')})"
+        parts.append(f"{t.get('name')}({arguments}) {status}")
+    return "; ".join(parts)
 
 
 def _run_once(args, ollama: OllamaClient, prompt: str) -> bool:
@@ -94,7 +113,7 @@ def _run_once(args, ollama: OllamaClient, prompt: str) -> bool:
         prompt, ollama, host, port,
         local_model=args.model, peer_model=args.peer_model,
         token=args.token, timeout=args.timeout, node_name=args.name,
-        diverse=args.diverse,
+        diverse=args.diverse, agent=args.agent,
     )
     note = None
     if args.diverse and local.ok and remote.ok and same_model(local.model, remote.model):
@@ -114,11 +133,15 @@ def _run_once(args, ollama: OllamaClient, prompt: str) -> bool:
 
 
 def _cmd_serve(args, ollama: OllamaClient) -> int:
-    server = PeerServer(ollama, host=args.host, port=args.port,
-                        model=args.model, token=args.token, node_name=args.name)
+    server = PeerServer(ollama, host=args.host, port=args.port, model=args.model,
+                        token=args.token, node_name=args.name, agent=args.agent)
     host, port = server.address
     print(f"[serve] '{args.name}' listening on {host}:{port}, using Ollama at {args.ollama}")
     print("[serve] token required" if args.token else "[serve] WARNING: no token set, anyone on the network can send prompts")
+    if args.agent is not None:
+        allowed = ", ".join(sorted(args.agent.remote_allowed_tools)) or "none"
+        print(f"[serve] agent mode: MCP servers {', '.join(s.name for s in args.agent.servers) or 'none'}; "
+              f"tools allowed for remote prompts: {allowed}")
     print("[serve] press Ctrl+C to stop")
     try:
         server.serve_forever()
@@ -133,7 +156,7 @@ def _cmd_ask(args, ollama: OllamaClient) -> int:
     server = None
     if args.serve:
         server = PeerServer(ollama, port=args.listen_port, model=args.model,
-                            token=args.token, node_name=args.name)
+                            token=args.token, node_name=args.name, agent=args.agent)
         server.start_in_background()
         print(f"[serve] also answering the other machine on port {server.address[1]}")
 
@@ -173,7 +196,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             else:
                 stream.reconfigure(encoding="utf-8", errors="replace")
 
-    args = _build_parser().parse_args(argv)
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    try:
+        args.agent = AgentConfig.load(args.config) if args.config else None
+    except AgentError as exc:
+        parser.error(str(exc))
     ollama = OllamaClient(args.ollama, timeout=args.timeout)
     if args.command == "serve":
         return _cmd_serve(args, ollama)

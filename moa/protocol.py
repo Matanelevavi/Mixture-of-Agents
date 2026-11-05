@@ -27,6 +27,10 @@ Message types (all carry "v": PROTOCOL_VERSION and "type"):
          "node": "<answerer name>", "model": "<model used>",
          "answer": "...", "elapsed_ms": 1234}
 
+        agent mode adds "tools": [{"name": "read_file", "arguments": {...},
+        "ok": true, "error": null}, ...] - the tool calls behind the answer.
+        Older askers simply ignore the field.
+
     answer  (answerer -> asker), failure
         {"v": 1, "type": "answer", "id": "<same uuid>", "ok": false,
          "node": "<answerer name>", "error": "<human readable reason>"}

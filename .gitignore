@@ -3,3 +3,7 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+
+# local agent config and the folder it exposes
+moa.json
+shared/

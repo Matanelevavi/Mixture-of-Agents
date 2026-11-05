@@ -1,13 +1,15 @@
 """Minimal client for the local Ollama REST API (standard library only).
 
-Ollama listens on http://127.0.0.1:11434 by default. We use two endpoints:
+Ollama listens on http://127.0.0.1:11434 by default. We use three endpoints:
     GET  /api/tags      -> list of installed models
     POST /api/generate  -> run one prompt ("stream": false = one JSON reply)
+    POST /api/chat      -> a conversation, optionally with tools (agent mode)
 """
 
 from __future__ import annotations
 
 import json
+import re
 import socket
 import time
 import urllib.error
@@ -44,6 +46,23 @@ class Generation:
     text: str
     model: str
     elapsed_s: float
+
+
+@dataclass
+class ToolCall:
+    """One tool the model asked to run."""
+    name: str
+    arguments: Dict[str, Any]
+
+
+@dataclass
+class ChatReply:
+    text: str                  # the model's text (may be empty when it only asks for tools)
+    tool_calls: List[ToolCall]  # empty = this is the final answer
+    model: str
+
+
+_THINKING = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
 class OllamaClient:
@@ -119,3 +138,35 @@ class OllamaClient:
             model=reply.get("model", name),
             elapsed_s=time.perf_counter() - started,
         )
+
+    def chat(self, messages: List[Dict[str, Any]], model: str,
+             tools: Optional[List[Dict[str, Any]]] = None) -> ChatReply:
+        """One round of /api/chat. With `tools`, the model may answer with tool calls.
+
+        Ollama's format: tools = [{"type": "function", "function": {name, description,
+        parameters}}]; a tool call comes back as message.tool_calls[i].function with
+        `name` and `arguments` (a JSON object).
+        """
+        body: Dict[str, Any] = {"model": model, "messages": messages, "stream": False}
+        if tools:
+            body["tools"] = tools
+        reply = self._request("POST", "/api/chat", body)
+        message = reply.get("message")
+        if not isinstance(message, dict):
+            raise OllamaError(f"unexpected reply from Ollama: {reply!r}")
+
+        calls = []
+        for call in message.get("tool_calls") or []:
+            function = call.get("function") or {}
+            arguments = function.get("arguments") or {}
+            if isinstance(arguments, str):  # tolerate arguments sent as JSON text
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    arguments = {}
+            calls.append(ToolCall(name=str(function.get("name", "")),
+                                  arguments=arguments if isinstance(arguments, dict) else {}))
+
+        # Some models print their reasoning between <think> tags; it is not the answer.
+        text = _THINKING.sub("", message.get("content") or "").strip()
+        return ChatReply(text=text, tool_calls=calls, model=reply.get("model", model))

@@ -7,7 +7,8 @@ at the same time, sends it over the network to **machine B**, where the same pro
 runs it on B's Ollama and sends the answer back. A prints both answers.
 
 There is no central server and no proxy in front of Ollama: just two identical peers.
-Pure Python standard library, no dependencies to install.
+The basic mode uses only the Python standard library. Agent mode (each machine's model can use
+tools from MCP servers, see [Agent mode](#agent-mode-mcp-connectors)) needs the MCP SDK: `pip install -r requirements.txt`.
 
 ## How it works
 
@@ -43,7 +44,7 @@ sequenceDiagram
 
 ## Requirements
 
-* Python 3.9+ on both machines
+* Python 3.9+ on both machines (3.10+ for agent mode)
 * [Ollama](https://ollama.com) installed and running on both machines, with at least one model pulled, e.g. `ollama pull llama3.2`
 * The two machines can reach each other over the network (same LAN, or a VPN such as Tailscale)
 
@@ -151,7 +152,89 @@ the protocol version did not need to change.
   shows its own answer and a clear error for B (and vice versa).
 * **Shared token**, compared in constant time (`hmac.compare_digest`).
 * **Bounded resources**: 16 MiB maximum message size, connect timeout, read timeouts.
-* **No dependencies**: `socket`, `socketserver`, `urllib`, `json`, `concurrent.futures`.
+* **No dependencies in the basic mode**: `socket`, `socketserver`, `urllib`, `json`, `concurrent.futures`.
+  Agent mode adds the official MCP SDK (`mcp`), imported only when a config is given.
+
+## Agent mode (MCP connectors)
+
+With `--config moa.json`, each machine answers as an **agent**: its model can use tools from the
+MCP servers (connectors) listed in its own config. The two-machine flow does not change: machine A
+still sends the prompt to machine B over the same TCP protocol, and gets both answers back. Each
+answer now also lists the tool calls behind it.
+
+```
+user on A ──► agent A ──► A's MCP servers
+         │
+         └─TCP─► agent B ──► B's MCP servers (only tools allowed for remote prompts)
+```
+
+The model never talks to an MCP server. `moa/agent.py` does: it lists the tools of each configured
+server (`tools/list`), sends their descriptions to the model with Ollama's `/api/chat`, runs every
+tool the model asks for (`tools/call`), sends the result back, and repeats until the model answers
+without asking for a tool.
+
+### Setup
+
+```bash
+pip install -r requirements.txt
+ollama pull llama3.2:3b          # a model with tool support; very small models are less reliable with tools
+cp moa.example.json moa.json     # Windows: copy moa.example.json moa.json
+mkdir shared                     # put a few text files in it
+```
+
+`moa.json` uses the same `mcpServers` layout as Claude Desktop, so other MCP servers can be added:
+
+```json
+{
+  "mcpServers": {
+    "files": {"command": "python", "args": ["-m", "moa.servers.files", "--root", "shared"]}
+  },
+  "remoteAllowedTools": ["list_files", "read_file"],
+  "maxToolCalls": 6
+}
+```
+
+Relative paths are relative to the folder of `moa.json`. `"python"` means the interpreter that runs moa.
+
+```bash
+# machine B
+python -m moa serve --config moa.json --token <shared-secret>
+# machine A
+python -m moa ask --peer <B's IP> --config moa.json --token <shared-secret> "Which files do you have and what is in them?"
+```
+
+Each answer then shows a line such as
+`tools: list_files() ok; read_file(path='list.txt') ok`.
+
+### The included connector: `moa.servers.files`
+
+A small MCP server written for this project (`moa/servers/files.py`). It exposes one folder,
+read-only, with two tools: `list_files` and `read_file(path)`. Paths that resolve outside the folder
+(`../x`, absolute paths, symlinks pointing out) are refused, and files over 64 KiB are not read.
+
+### Security: a prompt from the network now triggers tools
+
+In the basic mode, a prompt from the peer only produces text. In agent mode it makes this machine's
+agent run tools on this machine, so a peer could ask it to read whatever the tools can reach. The
+limits are:
+
+* `remoteAllowedTools`: the tools a prompt **from the peer** may use. Tools not listed are not even
+  offered to the model, and a call to them is refused. The default is none (a plain model).
+  The local user on the machine may use every configured tool.
+* The files connector is read-only and confined to its folder.
+* `maxToolCalls` stops a model that keeps calling tools.
+* The traffic is still unencrypted, including tool results (see the limitations).
+
+### What was tested
+
+The agent loop, the files connector and the two-machine flow are covered by automated tests that use
+a scripted fake model and the real MCP server (`tests/test_agent.py`), including the refused paths and
+the remote allowlist. It has **not yet been run with a real model on two machines**; how well small
+local models choose and call tools is still to be measured.
+
+Design note: the MCP servers are started for each prompt and stopped after it. This is simple and
+keeps requests independent, at the cost of starting a process per prompt (in the test environment a
+full round with the fake model took about 1.5 s, most of it starting the server).
 
 ## Tests
 

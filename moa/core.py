@@ -5,8 +5,9 @@ from __future__ import annotations
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
+from .agent import AgentConfig, AgentError, run_agent
 from .ollama_client import OllamaClient, OllamaError
 from .peer import PeerError, ask_peer
 
@@ -20,17 +21,25 @@ class Answer:
     text: Optional[str] = None
     error: Optional[str] = None
     elapsed_s: float = 0.0
+    tools: Optional[List[dict]] = None  # agent mode only: the tool calls that produced the answer
 
     def to_dict(self) -> dict:
         return asdict(self)
 
 
-def _local(ollama: OllamaClient, prompt: str, model: Optional[str], node: str) -> Answer:
+def _local(ollama: OllamaClient, prompt: str, model: Optional[str], node: str,
+           agent: Optional[AgentConfig]) -> Answer:
     started = time.perf_counter()
     try:
-        result = ollama.generate(prompt, model)
-        return Answer("local", node, True, result.model, result.text, elapsed_s=result.elapsed_s)
-    except OllamaError as exc:
+        if agent is None:
+            result = ollama.generate(prompt, model)
+            return Answer("local", node, True, result.model, result.text, elapsed_s=result.elapsed_s)
+        # The local user may use every configured tool (allowed_tools=None).
+        result = run_agent(prompt, ollama, agent, model=model)
+        return Answer("local", node, True, result.model, result.text,
+                      elapsed_s=time.perf_counter() - started,
+                      tools=[t.to_dict() for t in result.tools_used])
+    except (OllamaError, AgentError) as exc:
         return Answer("local", node, False, error=str(exc), elapsed_s=time.perf_counter() - started)
 
 
@@ -41,7 +50,7 @@ def _remote(host: str, port: int, prompt: str, model: Optional[str],
         result = ask_peer(host, port, prompt, model=model, token=token,
                           timeout=timeout, avoid_model=avoid)
         return Answer("peer", result.node, True, result.model, result.text,
-                      elapsed_s=time.perf_counter() - started)
+                      elapsed_s=time.perf_counter() - started, tools=result.tools)
     except PeerError as exc:
         return Answer("peer", f"{host}:{port}", False, error=str(exc),
                       elapsed_s=time.perf_counter() - started)
@@ -58,6 +67,7 @@ def ask_both(
     timeout: float = 300.0,
     node_name: str = "local",
     diverse: bool = False,
+    agent: Optional[AgentConfig] = None,
 ) -> Tuple[Answer, Answer]:
     """Send `prompt` to the local Ollama and to the peer in parallel.
 
@@ -67,6 +77,10 @@ def ask_both(
     diverse=True: if no peer model was requested, tell the peer which model
     answers locally, so it can pick a different one. This needs the local
     model name BEFORE the parallel step: one quick local /api/tags call.
+
+    agent: with an MCP configuration, the local answer comes from an agent
+    that can use the configured tools. Whether the peer uses tools is decided
+    by the peer's own configuration.
     """
     avoid = None
     if diverse and not peer_model:
@@ -77,7 +91,7 @@ def ask_both(
             pass  # local Ollama is down; _local below reports it as usual
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        local_future = pool.submit(_local, ollama, prompt, local_model, node_name)
+        local_future = pool.submit(_local, ollama, prompt, local_model, node_name, agent)
         peer_future = pool.submit(_remote, peer_host, peer_port, prompt,
                                   peer_model, token, timeout, avoid)
         return local_future.result(), peer_future.result()
