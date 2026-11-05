@@ -55,6 +55,12 @@ class AgentTests(unittest.TestCase):
         self.assertEqual([(t.name, t.arguments, t.ok) for t in result.tools_used],
                          [("files__read_file", {"path": "todo.txt"}, True)])
 
+    def test_byte_order_mark_is_not_passed_to_the_model(self):
+        (self.shared / "bom.txt").write_bytes(b"\xef\xbb\xbfwith a BOM")  # as PowerShell 5 writes it
+        result = run_agent("CALL files__read_file {\"path\": \"bom.txt\"}", self.ollama, self.config)
+        self.assertIn("with a BOM", result.text)
+        self.assertNotIn("﻿", result.text)
+
     def test_tools_are_offered_to_the_model_with_their_schema(self):
         run_agent("hello", self.ollama, self.config)
         offered = {t["function"]["name"]: t["function"] for t in self.fake.chat_requests[0]["tools"]}

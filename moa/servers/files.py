@@ -86,7 +86,9 @@ def read_file(path: str) -> str:
     size = target.stat().st_size
     if size > MAX_READ_BYTES:
         raise ToolError(f"{path!r} is {size} bytes; the limit is {MAX_READ_BYTES}")
-    return target.read_text(encoding="utf-8", errors="replace")
+    # utf-8-sig drops a leading byte order mark (Windows PowerShell 5 writes one
+    # with -Encoding utf8) and reads files without one exactly like utf-8.
+    return target.read_text(encoding="utf-8-sig", errors="replace")
 
 
 # --------------------------------------------------------------------------

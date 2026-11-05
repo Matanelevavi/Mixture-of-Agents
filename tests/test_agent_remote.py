@@ -101,6 +101,11 @@ class RemoteMcpTests(unittest.TestCase):
         self.assertIn("refused the token (HTTP 401)", result.warnings[0])
         self.assertEqual(set(self._offered()), {"my_files__list_files", "my_files__read_file"})
         self.assertIn("notes of machine A", result.text)
+        # The model is told that the server is missing, not that the file is.
+        system = " ".join(m["content"] for m in self.fake.chat_requests[0]["messages"] if m["role"] == "system")
+        self.assertIn("'pc_b_files' unavailable", system)
+        self.assertIn("refused the token (HTTP 401)", system)
+        self.assertIn("do not conclude that a file does not exist", system)
 
     def test_missing_token_variable_means_no_connection(self):
         os.environ.pop(TOKEN_ENV)

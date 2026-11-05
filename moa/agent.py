@@ -260,8 +260,8 @@ async def _run(prompt, ollama, config, model, avoid, allowed_tools) -> AgentResu
         messages: List[Dict[str, Any]] = []
         if tool_specs:
             messages.append({"role": "system", "content": SYSTEM_PROMPT})
-        if warnings:  # tell the model, so it does not pretend it could look
-            messages.append({"role": "system", "content": "Unavailable right now: " + "; ".join(warnings)})
+        if warnings:  # tell the model, so it does not answer as if it had looked
+            messages.append({"role": "system", "content": _unavailable_note(warnings)})
         messages.append({"role": "user", "content": prompt})
         used: List[ToolUse] = []
 
@@ -282,6 +282,21 @@ async def _run(prompt, ollama, config, model, avoid, allowed_tools) -> AgentResu
                 used.append(use)
                 messages.append({"role": "tool", "tool_name": call.name,
                                  "content": result_text[:MAX_TOOL_RESULT_CHARS]})
+
+
+def _unavailable_note(warnings: List[str]) -> str:
+    """System message for servers that could not be used.
+
+    Found in a real run: with the remote server refused (HTTP 401), the model
+    tried the local files tool instead and answered that the file "does not
+    exist", although it was on the other machine. The note says plainly that
+    a missing server is not a missing file. It is a hint to the model, not a
+    guarantee; the warnings are still returned to the user separately.
+    """
+    return ("These MCP servers could not be used for this question: " + "; ".join(warnings) + ". "
+            "Their tools are missing, and the tools of other servers cannot see their files. "
+            "If the question is about one of them, say that it could not be reached and why; "
+            "do not conclude that a file does not exist.")
 
 
 async def _call_tool(tools: Dict[str, Tuple[Any, str]], call: ToolCall):
