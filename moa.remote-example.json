@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "my_files": {
+      "command": "python",
+      "args": ["-m", "moa.servers.files", "--root", "shared"]
+    },
+    "pc_b_files": {
+      "url": "http://192.168.10.7:8000/mcp",
+      "tokenEnv": "MOA_MCP_TOKEN"
+    }
+  },
+  "remoteAllowedTools": [],
+  "maxToolCalls": 6
+}

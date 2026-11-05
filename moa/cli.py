@@ -4,6 +4,8 @@
     python -m moa ask --peer 192.168.1.20 "..."  # asker (machine A), one prompt
     python -m moa ask --peer 192.168.1.20        # asker, interactive session
     python -m moa ask --peer 192.168.1.20 --serve  # both roles at once (symmetric)
+    python -m moa ask --config moa.json "..."      # this machine only (its agent may
+                                                   # still use remote MCP servers)
 
 Add --config moa.json to either command to answer as an agent that can use
 the MCP servers (connectors) listed in that file.
@@ -19,7 +21,7 @@ import sys
 from typing import List, Optional, Tuple
 
 from .agent import AgentConfig, AgentError
-from .core import Answer, ask_both
+from .core import Answer, ask_both, ask_local
 from .ollama_client import DEFAULT_OLLAMA_URL, OllamaClient, same_model
 from .peer import DEFAULT_PEER_PORT, PeerServer
 
@@ -64,8 +66,9 @@ def _build_parser() -> argparse.ArgumentParser:
                        help=f"TCP port to listen on (default: {DEFAULT_PEER_PORT})")
 
     ask = sub.add_parser("ask", parents=[common], help="send a prompt to both machines")
-    ask.add_argument("--peer", required=True, type=_parse_peer, metavar="HOST[:PORT]",
-                     help=f"address of the other machine (port default: {DEFAULT_PEER_PORT})")
+    ask.add_argument("--peer", type=_parse_peer, metavar="HOST[:PORT]",
+                     help=f"address of the other machine (port default: {DEFAULT_PEER_PORT}); "
+                          "without it only this machine answers")
     ask.add_argument("--peer-model", default=None,
                      help="model to request on the other machine (default: its own default)")
     ask.add_argument("--diverse", action="store_true",
@@ -86,6 +89,8 @@ def _print_answer(title: str, answer: Answer) -> None:
         print(f"model: {answer.model} | time: {answer.elapsed_s:.1f}s")
         if answer.tools is not None:
             print(f"tools: {_describe_tools(answer.tools)}")
+        for warning in answer.warnings or []:
+            print(f"warning: {warning}")
         print(RULE)
         print(answer.text.strip() if answer.text else "")
     else:
@@ -105,7 +110,18 @@ def _describe_tools(tools) -> str:
     return "; ".join(parts)
 
 
+def _run_local_only(args, ollama: OllamaClient, prompt: str) -> bool:
+    local = ask_local(prompt, ollama, model=args.model, node_name=args.name, agent=args.agent)
+    if args.json:
+        print(json.dumps({"prompt": prompt, "local": local.to_dict()}, ensure_ascii=False, indent=2))
+    else:
+        _print_answer(f"Answer - this machine ({local.node})", local)
+    return local.ok
+
+
 def _run_once(args, ollama: OllamaClient, prompt: str) -> bool:
+    if args.peer is None:
+        return _run_local_only(args, ollama, prompt)
     host, port = args.peer
     if not args.json:
         print(f"Sending the prompt to this machine and to {host}:{port} ...\n")

@@ -157,84 +157,121 @@ the protocol version did not need to change.
 
 ## Agent mode (MCP connectors)
 
-With `--config moa.json`, each machine answers as an **agent**: its model can use tools from the
-MCP servers (connectors) listed in its own config. The two-machine flow does not change: machine A
-still sends the prompt to machine B over the same TCP protocol, and gets both answers back. Each
-answer now also lists the tool calls behind it.
+With `--config moa.json`, each machine answers as an **agent**: its model can use tools from MCP
+servers ("connectors"). There are three ways for the machines to work together, usable separately
+or at the same time:
+
+| Channel | Transport | Who decides to run a tool | What crosses the network |
+|---|---|---|---|
+| ① Local MCP | stdio (child process) | this machine's model, on this machine's tools | nothing |
+| ② Remote MCP | Streamable HTTP + bearer token | **A's model, on tools that B exposes** (no model on B) | MCP messages (`tools/list`, `tools/call`) |
+| ③ Agent to agent | the TCP protocol above | B's model, on B's tools, within B's allowlist | a prompt and an answer |
 
 ```
-user on A ──► agent A ──► A's MCP servers
-         │
-         └─TCP─► agent B ──► B's MCP servers (only tools allowed for remote prompts)
+                 machine A                                          machine B
+ model A <-> agent A --① stdio--> files server (shared/)
+                    |--② MCP over HTTP + token ------------------> files server (public/), port 8000
+                    `--③ TCP: prompt / answer -------------------> agent B --① stdio--> files server (shared/)
 ```
 
-The model never talks to an MCP server. `moa/agent.py` does: it lists the tools of each configured
-server (`tools/list`), sends their descriptions to the model with Ollama's `/api/chat`, runs every
-tool the model asks for (`tools/call`), sends the result back, and repeats until the model answers
-without asking for a tool.
+The model never talks to an MCP server. `moa/agent.py` does: it connects to every configured
+server, lists its tools (`tools/list`), sends their descriptions to the model with Ollama's
+`/api/chat`, runs every tool the model asks for (`tools/call`), sends the result back, and repeats
+until the model answers without asking for a tool. Each answer lists the tool calls behind it, for
+example `tools: my_files__list_files() ok; pc_b_files__read_file(path='calendar.txt') ok`.
 
-### Setup
+**Tool names.** Every tool is shown to the model as `<server>__<tool>`, and its description says which
+server (local or remote, with its URL) it belongs to. Without this, this machine's files server and
+the other machine's files server would offer the same names and the model could not tell them apart.
+
+### Setup (both machines)
 
 ```bash
 pip install -r requirements.txt
-ollama pull llama3.2:3b          # a model with tool support; very small models are less reliable with tools
-cp moa.example.json moa.json     # Windows: copy moa.example.json moa.json
-mkdir shared                     # put a few text files in it
+ollama pull llama3.2:3b      # a model with tool support; very small models are less reliable with tools
 ```
 
-`moa.json` uses the same `mcpServers` layout as Claude Desktop, so other MCP servers can be added:
-
-```json
-{
-  "mcpServers": {
-    "files": {"command": "python", "args": ["-m", "moa.servers.files", "--root", "shared"]}
-  },
-  "remoteAllowedTools": ["list_files", "read_file"],
-  "maxToolCalls": 6
-}
-```
-
-Relative paths are relative to the folder of `moa.json`. `"python"` means the interpreter that runs moa.
+### ① and ③: local tools, and agent to agent
 
 ```bash
+cp moa.example.json moa.json     # Windows: copy moa.example.json moa.json
+mkdir shared                     # put a few text files in it
 # machine B
 python -m moa serve --config moa.json --token <shared-secret>
 # machine A
-python -m moa ask --peer <B's IP> --config moa.json --token <shared-secret> "Which files do you have and what is in them?"
+python -m moa ask --peer <B's IP> --config moa.json --token <shared-secret> "Which files do you have?"
 ```
 
-Each answer then shows a line such as
-`tools: list_files() ok; read_file(path='list.txt') ok`.
+Both machines answer, each from its own folder. `remoteAllowedTools` (on B) lists the tools a
+prompt **from the peer** may make B's agent use; tools not listed are not even offered to the model.
+The default is none (a plain model).
+
+### ②: A's model uses B's tools directly
+
+On B, expose a separate folder over HTTP. The token is read from an environment variable and must be
+at least 16 characters:
+
+```powershell
+$env:MOA_MCP_TOKEN = "<long random token>"
+mkdir public                     # test files only, nothing sensitive
+python -m moa.servers.files --root public --http 192.168.10.7:8000
+```
+
+On A, use `moa.remote-example.json` (set B's address in `url`), set the same token in
+`MOA_MCP_TOKEN`, and ask without `--peer`; only A's model answers, using its own and B's tools:
+
+```bash
+python -m moa ask --config moa.json "What is in the shared folder of pc_b?"
+```
+
+`moa.json` never contains the token itself, only the name of the variable that holds it
+(`tokenEnv`). Relative paths are relative to the folder of `moa.json`, and `"python"` means the
+interpreter that runs moa. The layout of `mcpServers` is the same as Claude Desktop's, so other
+MCP servers can be added.
 
 ### The included connector: `moa.servers.files`
 
 A small MCP server written for this project (`moa/servers/files.py`). It exposes one folder,
 read-only, with two tools: `list_files` and `read_file(path)`. Paths that resolve outside the folder
 (`../x`, absolute paths, symlinks pointing out) are refused, and files over 64 KiB are not read.
+It runs over stdio by default, or over Streamable HTTP with `--http HOST:PORT`.
 
-### Security: a prompt from the network now triggers tools
+### Security
 
-In the basic mode, a prompt from the peer only produces text. In agent mode it makes this machine's
-agent run tools on this machine, so a peer could ask it to read whatever the tools can reach. The
-limits are:
+Every limit on B's data is enforced on B; filtering on the client side is not counted as protection.
 
-* `remoteAllowedTools`: the tools a prompt **from the peer** may use. Tools not listed are not even
-  offered to the model, and a call to them is refused. The default is none (a plain model).
-  The local user on the machine may use every configured tool.
-* The files connector is read-only and confined to its folder.
-* `maxToolCalls` stops a model that keeps calling tools.
-* The traffic is still unencrypted, including tool results (see the limitations).
+| Risk | Protection |
+|---|---|
+| Someone without permission calls B's HTTP server | Every request needs `Authorization: Bearer <token>`, checked through the SDK's `TokenVerifier` interface with a constant-time comparison; otherwise HTTP 401 |
+| B's HTTP server started unprotected by mistake | It refuses to start without a token of 16+ characters |
+| A web page in a browser on B's network calls the server (DNS rebinding) | Only the `Host` values given by `--http` / `--allow-host` are accepted (421 otherwise; `--allow-host` is required on `0.0.0.0`); no browser `Origin` is accepted (403) |
+| A's model reads B's private files | The HTTP server exposes only its own folder (use a separate one, e.g. `public/`), read-only, and refuses paths that leave it |
+| A prompt from the peer makes B's agent use tools | `remoteAllowedTools` on B (default: none) |
+| A model that keeps calling tools | `maxToolCalls` |
+| A remote server that is down or refuses the token | A warning in the answer; the agent continues with its other tools |
+
+**Not encrypted.** Like the TCP protocol, HTTP sends the token and the files in clear text (which a
+Wireshark capture will show). Use it only on a network you control with test data, never forward the
+port to the internet, and use a VPN such as Tailscale (WireGuard, encrypted) between different
+networks. HTTPS is a possible next step.
+
+`AuthSettings` in the SDK comes from OAuth, where tokens are issued by a separate authorization
+server. Here the token is a shared secret set by hand, so there is no such server and the URLs the
+SDK requires point to the files server itself (they only appear in the metadata it publishes).
 
 ### What was tested
 
-The agent loop, the files connector and the two-machine flow are covered by automated tests that use
-a scripted fake model and the real MCP server (`tests/test_agent.py`), including the refused paths and
-the remote allowlist. It has **not yet been run with a real model on two machines**; how well small
-local models choose and call tools is still to be measured.
+Automated tests cover the agent loop, the files server over stdio and over HTTP, and all three
+channels, using a scripted fake model and the real MCP servers: `tests/test_agent.py`,
+`tests/test_files_http.py` (authentication and host checks against a running HTTP server) and
+`tests/test_agent_remote.py` (one answer using a local and a remote tool, wrong or missing token,
+unreachable server, allowlists). It has **not yet been run with a real model on two machines**; how
+well small local models choose and call tools is still to be measured.
 
-Design note: the MCP servers are started for each prompt and stopped after it. This is simple and
-keeps requests independent, at the cost of starting a process per prompt (in the test environment a
-full round with the fake model took about 1.5 s, most of it starting the server).
+Design note: local MCP servers are started for each prompt and remote ones are connected for each
+prompt, then closed. This is simple and keeps requests independent, at the cost of starting a process
+per prompt (in the test environment a full round with the fake model took about 1.5 s, most of it
+starting the local server).
 
 ## Tests
 
@@ -246,6 +283,8 @@ The tests replace Ollama with a small fake HTTP server (`tests/fake_ollama.py`),
 run anywhere without a model. They cover framing (split and merged TCP reads, truncated
 and oversized messages), the full two-peer flow, parallel execution, peer down,
 local Ollama down, unknown model, token enforcement and the CLI's JSON output.
+The agent-mode tests (described in [What was tested](#what-was-tested)) also start the real
+MCP servers, so they need `pip install -r requirements.txt`.
 
 ## Findings from a real two-machine run
 

@@ -1,10 +1,10 @@
 {
   "mcpServers": {
-    "files": {
+    "my_files": {
       "command": "python",
       "args": ["-m", "moa.servers.files", "--root", "shared"]
     }
   },
-  "remoteAllowedTools": ["list_files", "read_file"],
+  "remoteAllowedTools": ["my_files__list_files", "my_files__read_file"],
   "maxToolCalls": 6
 }

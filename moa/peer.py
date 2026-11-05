@@ -103,7 +103,7 @@ class PeerServer:
             # from the asker's model (avoid_model, sent with --diverse).
             started = time.perf_counter()
             model = request.get("model") or self.model
-            tools = None
+            tools, warnings = None, []
             if self.agent is None:
                 result = self.ollama.generate(prompt, model, avoid=request.get("avoid_model"))
             else:
@@ -113,6 +113,9 @@ class PeerServer:
                                    avoid=request.get("avoid_model"),
                                    allowed_tools=self.agent.remote_allowed_tools)
                 tools = [t.to_dict() for t in result.tools_used]
+                warnings = result.warnings
+                for w in warnings:
+                    self.log(f"[serve] warning: {w}")
                 for t in result.tools_used:
                     self.log(f"[serve] tool {t.name}({t.arguments}) -> {'ok' if t.ok else 'refused/failed: ' + str(t.error)}")
             elapsed_ms = int((time.perf_counter() - started) * 1000)
@@ -124,6 +127,8 @@ class PeerServer:
             }
             if tools is not None:
                 answer["tools"] = tools
+            if warnings:
+                answer["warnings"] = warnings
             send_message(sock, answer)
             self.log(f"[serve] answered {who} with {result.model} in {elapsed_ms} ms")
         except (ProtocolError, OllamaError, AgentError, PermissionError) as exc:
@@ -172,6 +177,7 @@ class PeerAnswer:
     node: str
     elapsed_ms: int
     tools: Optional[List[dict]] = None  # present when the peer answered as an agent
+    warnings: Optional[List[str]] = None
 
 
 def ask_peer(
@@ -212,6 +218,7 @@ def ask_peer(
         node=str(reply.get("node", host)),
         elapsed_ms=int(reply.get("elapsed_ms", 0)),
         tools=_tool_list(reply.get("tools")),
+        warnings=[w for w in reply.get("warnings") or [] if isinstance(w, str)] or None,
     )
 
 

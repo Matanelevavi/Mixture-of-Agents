@@ -22,6 +22,7 @@ class Answer:
     error: Optional[str] = None
     elapsed_s: float = 0.0
     tools: Optional[List[dict]] = None  # agent mode only: the tool calls that produced the answer
+    warnings: Optional[List[str]] = None  # agent mode only: MCP servers that could not be used
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -38,7 +39,8 @@ def _local(ollama: OllamaClient, prompt: str, model: Optional[str], node: str,
         result = run_agent(prompt, ollama, agent, model=model)
         return Answer("local", node, True, result.model, result.text,
                       elapsed_s=time.perf_counter() - started,
-                      tools=[t.to_dict() for t in result.tools_used])
+                      tools=[t.to_dict() for t in result.tools_used],
+                      warnings=result.warnings or None)
     except (OllamaError, AgentError) as exc:
         return Answer("local", node, False, error=str(exc), elapsed_s=time.perf_counter() - started)
 
@@ -50,10 +52,18 @@ def _remote(host: str, port: int, prompt: str, model: Optional[str],
         result = ask_peer(host, port, prompt, model=model, token=token,
                           timeout=timeout, avoid_model=avoid)
         return Answer("peer", result.node, True, result.model, result.text,
-                      elapsed_s=time.perf_counter() - started, tools=result.tools)
+                      elapsed_s=time.perf_counter() - started, tools=result.tools,
+                      warnings=result.warnings)
     except PeerError as exc:
         return Answer("peer", f"{host}:{port}", False, error=str(exc),
                       elapsed_s=time.perf_counter() - started)
+
+
+def ask_local(prompt: str, ollama: OllamaClient, model: Optional[str] = None,
+              node_name: str = "local", agent: Optional[AgentConfig] = None) -> Answer:
+    """Only this machine answers (no peer). With an agent config it may still
+    use remote MCP servers, so another machine's tools can be used directly."""
+    return _local(ollama, prompt, model, node_name, agent)
 
 
 def ask_both(
