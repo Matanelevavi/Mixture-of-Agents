@@ -1,1 +1,4 @@
 mcp>=2,<3
+# Gmail connector (moa/servers/gmail.py)
+google-api-python-client>=2
+google-auth-oauthlib>=1

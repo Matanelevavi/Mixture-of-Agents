@@ -276,6 +276,37 @@ prompt, then closed. This is simple and keeps requests independent, at the cost 
 per prompt (in the test environment a full round with the fake model took about 1.5 s, most of it
 starting the local server).
 
+## Gmail connector (in progress)
+
+`moa/servers/gmail.py` is an MCP server for one Gmail mailbox, built on the Gmail API. It plugs
+into the same agent through `moa.json` (see `moa.gmail-example.json`); the agent loop does not
+change. It is meant for a dedicated test account, not a personal mailbox.
+
+| Tool | Does | Status |
+|---|---|---|
+| `search_emails(query, max_results)` | Gmail search syntax (`is:unread`, `newer_than:7d`, `from:...`), up to 20 results with their ids | built, tested with a fake Gmail service |
+| `read_email(message_id)` | headers and the text body (plain text, or HTML turned into text), cut at 8,000 characters | built, tested with a fake Gmail service |
+| labels, trash (not permanent deletion), drafts (never sending) | | planned |
+
+Design points:
+
+* **OAuth 2.0, desktop app.** `python -m moa.servers.gmail --login` opens the browser once and
+  saves `token.json`; the server itself never opens a browser, because over stdio its stdout
+  belongs to the MCP protocol. `credentials.json` and `token.json` are in `.gitignore`.
+* **Scope `gmail.modify`**: read, label, trash and draft, but no permanent deletion. Requested now
+  so the planned tools need no second sign-in.
+* **Email text is untrusted input.** Anyone can send an email, so a message may carry
+  instructions aimed at the model (prompt injection). `read_email` marks the body as data from
+  the sender, the tools are annotated `readOnlyHint`, and no tool can send or forward mail.
+  Marking the body is a hint to the model, not a guarantee.
+
+Setup: a Google Cloud project with the Gmail API enabled, an OAuth consent screen in Testing
+mode with the test account as a test user, and an OAuth client of type *Desktop app*, downloaded
+as `credentials.json`. In Testing mode Google expires the refresh token after 7 days, after which
+`--login` has to be run again.
+
+Not yet run against a real mailbox; findings will be added here when it is.
+
 ## Tests
 
 ```bash

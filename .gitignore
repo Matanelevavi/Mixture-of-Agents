@@ -7,3 +7,9 @@ venv/
 # local agent config and the folder it exposes
 moa.json
 shared/
+moa.remote.json
+public/
+
+# Gmail connector: OAuth client and signed-in token - never commit
+credentials.json
+token.json
