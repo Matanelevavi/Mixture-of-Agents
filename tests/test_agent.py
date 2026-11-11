@@ -59,6 +59,15 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(set(offered), {"files__list_files", "files__read_file"})
         self.assertIn("path", offered["files__read_file"]["parameters"]["properties"])
 
+    def test_calls_stopped_by_the_limit_are_recorded_as_not_run(self):
+        prompt = "\n".join(['CALL files__read_file {"path": "todo.txt"}'] * 4)  # limit in setUp is 3
+        result = run_agent(prompt, self.ollama, self.config)
+        self.assertTrue(result.stopped_early)
+        self.assertEqual(result.tools_used, [])
+        self.assertEqual(len(result.warnings), 1)
+        self.assertIn("not run, tool-call limit reached", result.warnings[0])
+        self.assertEqual(result.warnings[0].count("files__read_file(path='todo.txt')"), 4)
+
     def test_the_model_is_told_todays_date(self):
         run_agent("hello", self.ollama, self.config)
         system = self.fake.chat_requests[0]["messages"][0]

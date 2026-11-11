@@ -127,8 +127,12 @@ async def _run(prompt: str, ollama: OllamaClient, config: AgentConfig, model: Op
                                    setup_s=setup_s, model_s=model_s)
             if len(used) + len(reply.tool_calls) > config.max_tool_calls:
                 note = f"(stopped: the model asked for more than {config.max_tool_calls} tool calls)"
+                # None of these ran, and no approval was asked: the limit applies first.
+                # They are recorded so the user can see what the model was about to do.
+                not_run = "; ".join(f"{c.name}({_arguments(c.arguments)})" for c in reply.tool_calls)
+                warnings = toolbox.warnings + [f"not run, tool-call limit reached: {not_run}"]
                 return AgentResult(f"{reply.text}\n{note}".strip(), reply.model, used,
-                                   stopped_early=True, warnings=toolbox.warnings,
+                                   stopped_early=True, warnings=warnings,
                                    setup_s=setup_s, model_s=model_s)
 
             messages.append(_assistant_message(reply))
@@ -235,6 +239,10 @@ async def _call_tool(toolbox: Toolbox, call: ToolCall, confirm: Optional[Confirm
     if result.is_error:
         return text or "Error", ToolUse(call.name, call.arguments, False, text or "tool error", seconds, waited)
     return text, ToolUse(call.name, call.arguments, True, None, seconds, waited)
+
+
+def _arguments(arguments: Dict[str, Any]) -> str:
+    return ", ".join(f"{k}={v!r}" for k, v in arguments.items())
 
 
 def _mentions(history: List[Dict[str, Any]], arguments: Dict[str, Any]) -> List[str]:
