@@ -276,17 +276,19 @@ prompt, then closed. This is simple and keeps requests independent, at the cost 
 per prompt (in the test environment a full round with the fake model took about 1.5 s, most of it
 starting the local server).
 
-## Gmail connector (in progress)
+## Gmail connector
 
 `moa/servers/gmail.py` is an MCP server for one Gmail mailbox, built on the Gmail API. It plugs
 into the same agent through `moa.json` (see `moa.gmail-example.json`); the agent loop does not
 change. It is meant for a dedicated test account, not a personal mailbox.
 
-| Tool | Does | Status |
+| Tool | Does | Marked as |
 |---|---|---|
-| `search_emails(query, max_results)` | Gmail search syntax (`is:unread`, `newer_than:7d`, `from:...`), up to 20 results with their ids | built, tested with a fake Gmail service |
-| `read_email(message_id)` | headers and the text body (plain text, or HTML turned into text), cut at 8,000 characters | built, tested with a fake Gmail service |
-| labels, trash (not permanent deletion), drafts (never sending) | | planned |
+| `search_emails(query, max_results)` | Gmail search syntax (`is:unread`, `newer_than:7d`, `from:...`), up to 20 results with their ids and Gmail's short preview (snippet) | read-only |
+| `read_email(message_id)` | headers and the text body (plain text, or HTML turned into text), cut at 8,000 characters | read-only |
+| `trash_email(message_id)` | moves one email to the Trash; Gmail keeps it there for 30 days, so it can be restored | changes the mailbox |
+
+There is no tool that sends, forwards or permanently deletes mail.
 
 Design points:
 
@@ -297,15 +299,58 @@ Design points:
   so the planned tools need no second sign-in.
 * **Email text is untrusted input.** Anyone can send an email, so a message may carry
   instructions aimed at the model (prompt injection). `read_email` marks the body as data from
-  the sender, the tools are annotated `readOnlyHint`, and no tool can send or forward mail.
-  Marking the body is a hint to the model, not a guarantee.
+  the sender, and no tool can send or forward mail. Marking the body is a hint to the model, not
+  a guarantee; the approval step below is the actual barrier.
+* **A person approves every change.** The agent runs a tool without asking only if its server
+  marks it `readOnlyHint`. For any other tool (here `trash_email`) it stops and asks on the
+  terminal of the machine that asked the question, showing the exact call and the lines of
+  earlier tool results that mention its arguments (e.g. the search line of that email id).
+  Anything but `y` is a no, and the model is told the action was not done. A prompt from the
+  peer has no one to ask, so such tools are refused even if listed in `remoteAllowedTools`.
+  The mark comes from the server itself; it is trusted here only because these are our own
+  servers. Unmarked tools are treated as changing something.
 
 Setup: a Google Cloud project with the Gmail API enabled, an OAuth consent screen in Testing
 mode with the test account as a test user, and an OAuth client of type *Desktop app*, downloaded
 as `credentials.json`. In Testing mode Google expires the refresh token after 7 days, after which
 `--login` has to be run again.
 
-Not yet run against a real mailbox; findings will be added here when it is.
+**First real run** (test account, three test emails sent from a personal address, `qwen2.5:7b`
+on machine A, one run): asked "What emails did I get recently? Is there a meeting or a task with
+a deadline?", the model called `search_emails(query='newer_than:1d', max_results=5)` once and no
+other tool. The answer listed the five emails returned, with the meeting (Thursday 12/11, 14:00,
+room 203) and the report deadline (Sunday) correct, as checked by hand against the mailbox. The
+test emails are one line long, so Gmail's snippet already held their whole text; this run did not
+exercise `read_email`. One date differed from Gmail's web view by a day (the model wrote 9 Nov,
+Gmail shows 10 Nov); the cause was not checked. The whole answer took 156.2 s; how that time
+divides between the model calls and the tools was not yet measured at that point.
+
+Not yet run against a real mailbox: `read_email` on a long email, `trash_email` with the approval
+step, and a prompt-injection email. Findings will be added here.
+
+## Aggregator (`--aggregate`)
+
+```bash
+python -m moa ask --peer <B's IP> --aggregate "..."
+python -m moa ask --peer <B's IP> --config moa.json --aggregate "..."   # agent mode
+```
+
+After both answers arrive, one more model call on machine A (by default the model that answered
+on A; `--aggregator-model` picks another) gets the question and both answers and writes one
+combined answer: what they agree on once, where they disagree, and a last line `Agreement:
+full / partial / none`. It has no tools and is told not to add facts. Both original answers are
+still printed above it, and `--json` adds an `aggregate` field. If one side failed there is
+nothing to combine, and the aggregator is skipped with a note.
+
+In agent mode each answer goes to the aggregator with its **tool record**, written by the code
+(`files__read_file(path='todo.txt') ok`, or `none used`, plus any unavailable server). The
+aggregator is told that a fact about files or emails counts as supported only if that record
+shows a successful tool call that could have returned it, and to mark other such facts
+`(unverified)`. This targets the case seen in the agent-mode run below, where a model quoted a
+file it never read. The aggregator is itself a model, so this is an instruction it may not
+follow; the tool records printed by the code remain the reliable evidence.
+
+Not yet run with real models; findings will be added here.
 
 ## Tests
 
@@ -450,8 +495,7 @@ In both cases the evidence was in the tool record and the warning line, not in t
   or add TLS (an `ssl.SSLContext` wrapping the socket on both sides; HTTPS for the MCP server).
 * Answers are returned when complete; streaming tokens as they are generated would need
   streaming frames in the protocol.
-* Extends naturally to N peers (`--peer` repeated) and to a final step where a model
-  merges or compares the answers (a Mixture-of-Agents aggregator).
+* Extends naturally to N peers (`--peer` repeated).
 
 ## Note on how this was built
 

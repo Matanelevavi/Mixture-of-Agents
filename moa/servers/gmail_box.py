@@ -1,7 +1,8 @@
 """One Gmail mailbox, seen through the Gmail API: the logic behind the gmail tools.
 
 Kept apart from authentication and from MCP so it can be tested with a fake
-Gmail service object. Everything an email contains is written by its sender,
+Gmail service object. trash_email changes the mailbox; the
+agent asks the user before running it. Everything an email contains is written by its sender,
 so message text is returned clearly marked as untrusted data.
 """
 
@@ -54,8 +55,7 @@ class GmailBox:
 
     def read_email(self, message_id: str) -> str:
         """Return the sender, recipients, subject, date and text of one email, by its id."""
-        if not MESSAGE_ID.match(message_id or ""):
-            raise ToolError(f"{message_id!r} is not an email id; take one from search_emails")
+        _check_id(message_id)
         message = self._call(self._messages.get(userId="me", id=message_id, format="full"),
                              missing=f"no email with id {message_id!r}")
         h = _headers(message)
@@ -64,6 +64,16 @@ class GmailBox:
             body = body[:MAX_BODY_CHARS] + f"\n... (cut at {MAX_BODY_CHARS} characters)"
         header_lines = [f"{name}: {h[name]}" for name in SUMMARY_HEADERS if name in h]
         return "\n".join(header_lines + [UNTRUSTED_START, body, UNTRUSTED_END])
+
+    def trash_email(self, message_id: str) -> str:
+        """Move one email to the Trash, by its id (from search_emails).
+
+        Not a permanent delete: Gmail keeps it in the Trash for 30 days, so it can be restored.
+        """
+        _check_id(message_id)
+        self._call(self._messages.trash(userId="me", id=message_id),
+                   missing=f"no email with id {message_id!r}")
+        return f"email {message_id} moved to the Trash (it can be restored from there for 30 days)"
 
     @staticmethod
     def _call(request: Any, missing: Optional[str] = None) -> Dict[str, Any]:
@@ -74,6 +84,12 @@ class GmailBox:
             if exc.resp.status == 404 and missing:
                 raise ToolError(missing) from exc
             raise ToolError(f"Gmail API error (HTTP {exc.resp.status})") from exc
+
+
+def _check_id(message_id: str) -> None:
+    """Refuse anything that is not an id before any API call."""
+    if not MESSAGE_ID.match(message_id or ""):
+        raise ToolError(f"{message_id!r} is not an email id; take one from search_emails")
 
 
 def _headers(message: Dict[str, Any]) -> Dict[str, str]:

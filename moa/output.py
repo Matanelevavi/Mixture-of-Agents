@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from .core import Answer
 
@@ -50,10 +50,13 @@ def print_answer(title: str, answer: Answer) -> None:
     print()
 
 
-def print_json(prompt: str, local: Answer, peer: Optional[Answer] = None, note: Optional[str] = None) -> None:
+def print_json(prompt: str, local: Answer, peer: Optional[Answer] = None, note: Optional[str] = None,
+               aggregate: Optional[Answer] = None) -> None:
     result = {"prompt": prompt, "local": local.to_dict()}
     if peer is not None:
         result["peer"] = peer.to_dict()
+    if aggregate is not None:
+        result["aggregate"] = aggregate.to_dict()
     if note:
         result["note"] = note
     print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -77,3 +80,21 @@ def describe_timing(timing: dict) -> str:
     model = ", ".join(f"{t:.1f}s" for t in calls) or "none"
     return (f"MCP setup {timing.get('setup_s', 0):.1f}s | model calls ({len(calls)}): {model} "
             f"| tools {timing.get('tools_s', 0):.1f}s")
+
+
+def confirm_in_terminal(name: str, arguments: Dict[str, Any], mentions: List[str]) -> bool:
+    """Ask the person at this machine before a tool that changes something runs.
+
+    Written to stderr, so `--json` output stays clean. Anything but y/yes,
+    including no input at all, means no.
+    """
+    shown = ", ".join(f"{k}={v!r}" for k, v in arguments.items())
+    sys.stderr.write(f"\nThe model wants to run {name}({shown}). This changes something.\n")
+    for line in mentions:
+        sys.stderr.write(f"    seen earlier: {line}\n")
+    sys.stderr.write("Allow? [y/N] ")
+    sys.stderr.flush()
+    try:
+        return input().strip().lower() in {"y", "yes"}
+    except EOFError:
+        return False

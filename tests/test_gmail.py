@@ -48,6 +48,7 @@ class _Request:
 class FakeGmail:
     def __init__(self, messages):
         self.messages_by_id = {m["id"]: m for m in messages}
+        self.trashed = []
         self.calls = []
 
     def users(self):
@@ -67,6 +68,13 @@ class FakeGmail:
         if id not in self.messages_by_id:
             return _Request(error=HttpError(httplib2.Response({"status": 404}), b"not found"))
         return _Request(self.messages_by_id[id])
+
+    def trash(self, userId, id):
+        self.calls.append(("trash", id))
+        if id not in self.messages_by_id:
+            return _Request(error=HttpError(httplib2.Response({"status": 404}), b"not found"))
+        self.trashed.append(id)
+        return _Request({"id": id, "labelIds": ["TRASH"]})
 
 
 MAILBOX = [
@@ -132,6 +140,27 @@ class GmailBoxTests(unittest.TestCase):
             self.box.read_email("zz9")
 
 
+class TrashTests(unittest.TestCase):
+    def setUp(self):
+        self.fake = FakeGmail(MAILBOX)
+        self.box = GmailBox(self.fake)
+
+    def test_trash_moves_the_email_and_says_it_can_be_restored(self):
+        text = self.box.trash_email("b2")
+        self.assertEqual(self.fake.trashed, ["b2"])
+        self.assertIn("Trash", text)
+        self.assertIn("restored", text)
+
+    def test_trash_refuses_an_invalid_id_before_any_api_call(self):
+        with self.assertRaises(ToolError):
+            self.box.trash_email("me/../other")
+        self.assertEqual(self.fake.calls, [])
+
+    def test_trash_of_an_unknown_id_is_a_clear_error(self):
+        with self.assertRaisesRegex(ToolError, "no email with id 'zz9'"):
+            self.box.trash_email("zz9")
+
+
 class GmailServerTests(unittest.TestCase):
     """The same box behind a real MCP server, through an in-memory MCP client."""
 
@@ -141,11 +170,14 @@ class GmailServerTests(unittest.TestCase):
                 return await action(client)
         return asyncio.run(run())
 
-    def test_tools_are_listed_as_read_only(self):
-        tools = self._with_client(lambda c: c.list_tools()).tools
-        self.assertEqual({t.name for t in tools}, {"search_emails", "read_email"})
-        for t in tools:
-            self.assertTrue(t.annotations.read_only_hint)
+    def test_only_trash_is_marked_as_changing_the_mailbox(self):
+        tools = {t.name: t for t in self._with_client(lambda c: c.list_tools()).tools}
+        self.assertEqual(set(tools), {"search_emails", "read_email", "trash_email"})
+        self.assertTrue(tools["search_emails"].annotations.read_only_hint)
+        self.assertTrue(tools["read_email"].annotations.read_only_hint)
+        self.assertFalse(tools["trash_email"].annotations.read_only_hint)
+        self.assertTrue(tools["trash_email"].annotations.destructive_hint)
+        for t in tools.values():
             self.assertTrue(t.description)
 
     def test_tool_call_through_mcp(self):

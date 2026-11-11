@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from typing import List, Optional, Tuple
 
 from .agent import AgentConfig, AgentError, AgentResult, run_agent
+from .agent.loop import Confirm
 from .ollama_client import OllamaClient, OllamaError
 from .peer_client import PeerError, ask_peer
 
@@ -30,14 +31,14 @@ class Answer:
 
 
 def _local(ollama: OllamaClient, prompt: str, model: Optional[str], node: str,
-           agent: Optional[AgentConfig]) -> Answer:
+           agent: Optional[AgentConfig], confirm: Optional[Confirm] = None) -> Answer:
     started = time.perf_counter()
     try:
         if agent is None:
             result = ollama.generate(prompt, model)
             return Answer("local", node, True, result.model, result.text, elapsed_s=result.elapsed_s)
         # The local user may use every configured tool (allowed_tools=None).
-        result = run_agent(prompt, ollama, agent, model=model)
+        result = run_agent(prompt, ollama, agent, model=model, confirm=confirm)
         return Answer("local", node, True, result.model, result.text,
                       elapsed_s=time.perf_counter() - started,
                       tools=[t.to_dict() for t in result.tools_used],
@@ -68,10 +69,11 @@ def _remote(host: str, port: int, prompt: str, model: Optional[str],
 
 
 def ask_local(prompt: str, ollama: OllamaClient, model: Optional[str] = None,
-              node_name: str = "local", agent: Optional[AgentConfig] = None) -> Answer:
+              node_name: str = "local", agent: Optional[AgentConfig] = None,
+              confirm: Optional[Confirm] = None) -> Answer:
     """Only this machine answers (no peer). With an agent config it may still
     use remote MCP servers, so another machine's tools can be used directly."""
-    return _local(ollama, prompt, model, node_name, agent)
+    return _local(ollama, prompt, model, node_name, agent, confirm)
 
 
 def ask_both(
@@ -86,6 +88,7 @@ def ask_both(
     node_name: str = "local",
     diverse: bool = False,
     agent: Optional[AgentConfig] = None,
+    confirm: Optional[Confirm] = None,
 ) -> Tuple[Answer, Answer]:
     """Send `prompt` to the local Ollama and to the peer in parallel.
 
@@ -98,7 +101,8 @@ def ask_both(
 
     agent: with an MCP configuration, the local answer comes from an agent
     that can use the configured tools. Whether the peer uses tools is decided
-    by the peer's own configuration.
+    by the peer's own configuration. confirm: asked before a local tool that
+    changes something runs (None: such tools are refused).
     """
     avoid = None
     if diverse and not peer_model:
@@ -109,7 +113,7 @@ def ask_both(
             pass  # local Ollama is down; _local below reports it as usual
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        local_future = pool.submit(_local, ollama, prompt, local_model, node_name, agent)
+        local_future = pool.submit(_local, ollama, prompt, local_model, node_name, agent, confirm)
         peer_future = pool.submit(_remote, peer_host, peer_port, prompt,
                                   peer_model, token, timeout, avoid)
         return local_future.result(), peer_future.result()

@@ -30,6 +30,7 @@ from mcp.server.auth.provider import AccessToken
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import ToolAnnotations
 
 from .folder import SharedFolder
 
@@ -79,8 +80,10 @@ def build_server(folder: SharedFolder, token: Optional[str] = None,
         log_level="ERROR",  # stderr is shared with the moa console; refused calls are reported to the caller anyway
         **auth_kwargs,
     )
-    server.tool()(folder.list_files)  # the docstrings become the tool descriptions
-    server.tool()(folder.read_file)
+    # Marked read-only, so the agent runs them without asking the user.
+    read_only = ToolAnnotations(read_only_hint=True)
+    server.tool(annotations=read_only)(folder.list_files)  # the docstrings become the tool descriptions
+    server.tool(annotations=read_only)(folder.read_file)
     return server
 
 

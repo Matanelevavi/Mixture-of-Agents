@@ -4,6 +4,7 @@
     python -m moa ask --peer 192.168.1.20 "..."  # asker (machine A), one prompt
     python -m moa ask --peer 192.168.1.20        # asker, interactive session
     python -m moa ask --peer 192.168.1.20 --serve  # both roles at once (symmetric)
+    python -m moa ask --peer 192.168.1.20 --aggregate "..."  # plus one combined answer
     python -m moa ask --config moa.json "..."      # this machine only (its agent may
                                                    # still use remote MCP servers)
 
@@ -19,9 +20,10 @@ import socket
 from typing import List, Optional, Tuple
 
 from .agent import AgentConfig, AgentError
+from .aggregate import aggregate
 from .core import ask_both, ask_local
 from .ollama_client import DEFAULT_OLLAMA_URL, OllamaClient, same_model
-from .output import configure_console, print_answer, print_json
+from .output import confirm_in_terminal, configure_console, print_answer, print_json
 from .peer_server import PeerServer
 from .protocol import DEFAULT_PEER_PORT
 
@@ -71,6 +73,10 @@ def _build_parser() -> argparse.ArgumentParser:
                      help="model to request on the other machine (default: its own default)")
     ask.add_argument("--diverse", action="store_true",
                      help="ask the other machine to answer with a different model than this one, if it has one")
+    ask.add_argument("--aggregate", action="store_true",
+                     help="after both answers, let a model on this machine combine them into one (needs --peer)")
+    ask.add_argument("--aggregator-model", default=None,
+                     help="model for --aggregate (default: the model that answered on this machine)")
     ask.add_argument("--json", action="store_true", help="print both answers as JSON")
     ask.add_argument("--serve", action="store_true",
                      help="also answer prompts from the other machine while this one asks")
@@ -81,7 +87,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _run_local_only(args: argparse.Namespace, ollama: OllamaClient, prompt: str) -> bool:
-    local = ask_local(prompt, ollama, model=args.model, node_name=args.name, agent=args.agent)
+    local = ask_local(prompt, ollama, model=args.model, node_name=args.name, agent=args.agent,
+                      confirm=confirm_in_terminal)
     if args.json:
         print_json(prompt, local)
     else:
@@ -99,20 +106,35 @@ def _run_once(args: argparse.Namespace, ollama: OllamaClient, prompt: str) -> bo
         prompt, ollama, host, port,
         local_model=args.model, peer_model=args.peer_model,
         token=args.token, timeout=args.timeout, node_name=args.name,
-        diverse=args.diverse, agent=args.agent,
+        diverse=args.diverse, agent=args.agent, confirm=confirm_in_terminal,
     )
     note = None
     if args.diverse and local.ok and remote.ok and same_model(local.model, remote.model):
         note = f"the other machine has no model other than {remote.model}, so both answers used it"
 
+    combined = None
+    if args.aggregate:
+        if not args.json:
+            print_answer(f"Answer 1 - this machine ({local.node})", local)
+            print_answer(f"Answer 2 - other machine ({remote.node})", remote)
+            print("Combining the two answers ...\n")
+        combined = aggregate(prompt, [local, remote], ollama,
+                             model=args.aggregator_model or local.model, node_name=args.name)
+        if combined is None:
+            skipped = "aggregation skipped: it needs two successful answers"
+            note = f"{note}; {skipped}" if note else skipped
+
     if args.json:
-        print_json(prompt, local, remote, note)
+        print_json(prompt, local, remote, note, aggregate=combined)
     else:
-        print_answer(f"Answer 1 - this machine ({local.node})", local)
-        print_answer(f"Answer 2 - other machine ({remote.node})", remote)
+        if not args.aggregate:
+            print_answer(f"Answer 1 - this machine ({local.node})", local)
+            print_answer(f"Answer 2 - other machine ({remote.node})", remote)
+        if combined is not None:
+            print_answer(f"Combined answer - aggregator on this machine ({combined.node})", combined)
         if note:
             print(f"Note: {note}\n")
-    return local.ok and remote.ok
+    return local.ok and remote.ok and (combined is None or combined.ok)
 
 
 def _cmd_serve(args: argparse.Namespace, ollama: OllamaClient) -> int:
@@ -167,6 +189,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     configure_console()
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if getattr(args, "aggregate", False) and args.peer is None:
+        parser.error("--aggregate needs --peer: there is only one answer to combine")
     try:
         args.agent = AgentConfig.load(args.config) if args.config else None
     except AgentError as exc:

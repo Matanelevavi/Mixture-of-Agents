@@ -8,6 +8,10 @@ The model never talks to an MCP server itself. This loop sits in between:
        the result back to the model
     4. repeat until the model answers without asking for a tool
 
+A tool that its server does not mark as read-only (e.g. gmail trash_email) is
+run only after a person approves that exact call (the `confirm` callback). With
+no one to ask (a prompt from the peer), such calls are refused.
+
 Every tool is shown to the model as "<server>__<tool>", so two servers with
 the same tools (this machine's files and the other machine's files) never
 collide, and the model can tell which machine a tool belongs to.
@@ -19,13 +23,17 @@ import asyncio
 import time
 from contextlib import AsyncExitStack
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from ..ollama_client import ChatReply, OllamaClient, ToolCall
 from .config import SEPARATOR, AgentConfig, AgentError, ServerConfig
 from .connect import connect, reason
 
 MAX_TOOL_RESULT_CHARS = 8000  # what the model sees from one tool result
+
+# Asked before a tool that changes something runs: (tool name, arguments,
+# lines of earlier tool results that mention those arguments) -> approved?
+Confirm = Callable[[str, Dict[str, Any], List[str]], bool]
 
 SYSTEM_PROMPT = (
     "You are an assistant running on one computer. You have tools from MCP servers; each tool "
@@ -65,10 +73,15 @@ class Toolbox:
     routes: Dict[str, Tuple[Any, str]] = field(default_factory=dict)  # name -> (MCP client, name on the server)
     specs: List[Dict[str, Any]] = field(default_factory=list)          # descriptions sent to the model
     warnings: List[str] = field(default_factory=list)
+    needs_approval: Set[str] = field(default_factory=set)  # tools not marked read-only by their server
 
     def add(self, server: ServerConfig, client: Any, tool: Any) -> None:
         name = f"{server.name}{SEPARATOR}{tool.name}"
         self.routes[name] = (client, tool.name)
+        # The mark comes from the server itself: trusted here because we
+        # configured these servers. Unmarked tools are treated as changing things.
+        if not (tool.annotations and tool.annotations.read_only_hint):
+            self.needs_approval.add(name)
         self.specs.append({"type": "function", "function": {
             "name": name,
             "description": f"[{server.label}] {tool.description or ''}".strip(),
@@ -78,19 +91,22 @@ class Toolbox:
 
 def run_agent(prompt: str, ollama: OllamaClient, config: AgentConfig,
               model: Optional[str] = None, avoid: Optional[str] = None,
-              allowed_tools: Optional[FrozenSet[str]] = None) -> AgentResult:
+              allowed_tools: Optional[FrozenSet[str]] = None,
+              confirm: Optional[Confirm] = None) -> AgentResult:
     """Answer `prompt` with the model, letting it use the configured MCP tools.
 
     allowed_tools=None means every configured tool (a local user on this
     machine); a set limits the agent to those "<server>__<tool>" names (a
-    prompt from the peer). Blocking call: runs its own event loop, so it is
-    safe from any thread.
+    prompt from the peer). confirm=None means no one can approve changes, so
+    tools that are not read-only are refused. Blocking call: runs its own
+    event loop, so it is safe from any thread.
     """
-    return asyncio.run(_run(prompt, ollama, config, model, avoid, allowed_tools))
+    return asyncio.run(_run(prompt, ollama, config, model, avoid, allowed_tools, confirm))
 
 
 async def _run(prompt: str, ollama: OllamaClient, config: AgentConfig, model: Optional[str],
-               avoid: Optional[str], allowed_tools: Optional[FrozenSet[str]]) -> AgentResult:
+               avoid: Optional[str], allowed_tools: Optional[FrozenSet[str]],
+               confirm: Optional[Confirm]) -> AgentResult:
     async with AsyncExitStack() as stack:  # closes every MCP connection at the end
         started = time.perf_counter()
         toolbox = await _open_toolbox(stack, config, allowed_tools)
@@ -115,7 +131,7 @@ async def _run(prompt: str, ollama: OllamaClient, config: AgentConfig, model: Op
 
             messages.append(_assistant_message(reply))
             for call in reply.tool_calls:
-                result_text, use = await _call_tool(toolbox, call)
+                result_text, use = await _call_tool(toolbox, call, confirm, messages)
                 used.append(use)
                 messages.append({"role": "tool", "tool_name": call.name,
                                  "content": result_text[:MAX_TOOL_RESULT_CHARS]})
@@ -169,12 +185,24 @@ def _assistant_message(reply: ChatReply) -> Dict[str, Any]:
         for c in reply.tool_calls]}
 
 
-async def _call_tool(toolbox: Toolbox, call: ToolCall) -> Tuple[str, ToolUse]:
+async def _call_tool(toolbox: Toolbox, call: ToolCall, confirm: Optional[Confirm],
+                     history: List[Dict[str, Any]]) -> Tuple[str, ToolUse]:
     """Run one tool call. Never raises: failures go back to the model as text."""
     route = toolbox.routes.get(call.name)
     if route is None:  # unknown, or not allowed for this request: never executed
         error = f"tool {call.name!r} is not available"
         return f"Error: {error}", ToolUse(call.name, call.arguments, False, error)
+
+    if call.name in toolbox.needs_approval:
+        if confirm is None:
+            error = "this tool changes something and no one is here to approve it"
+        elif not await asyncio.to_thread(confirm, call.name, call.arguments,
+                                         _mentions(history, call.arguments)):
+            error = "the user did not approve this action"
+        else:
+            error = None
+        if error:  # never executed
+            return f"Error: {error}; it was not done", ToolUse(call.name, call.arguments, False, error)
 
     client, tool_name = route
     started = time.perf_counter()
@@ -189,3 +217,18 @@ async def _call_tool(toolbox: Toolbox, call: ToolCall) -> Tuple[str, ToolUse]:
     if result.is_error:
         return text or "Error", ToolUse(call.name, call.arguments, False, text or "tool error", seconds)
     return text, ToolUse(call.name, call.arguments, True, None, seconds)
+
+
+def _mentions(history: List[Dict[str, Any]], arguments: Dict[str, Any]) -> List[str]:
+    """Lines of earlier tool results that contain an argument value, shown with
+    the approval question, so the user sees e.g. which email an id belongs to."""
+    values = [str(v) for v in arguments.values() if isinstance(v, (str, int)) and len(str(v)) >= 4]
+    lines: List[str] = []
+    for message in history:
+        if message["role"] != "tool":
+            continue
+        for line in message["content"].splitlines():
+            line = line.strip()
+            if any(v in line for v in values) and line not in lines:
+                lines.append(line)
+    return lines[:5]
