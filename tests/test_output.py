@@ -43,6 +43,22 @@ class TimingOutputTests(unittest.TestCase):
         self.assertIn("your request was: Summarize my emails", err.getvalue())
         self.assertIn("seen earlier: id=abc1234", err.getvalue())
 
+    def test_control_characters_from_tool_results_cannot_reach_the_terminal(self):
+        hostile = "id=abc1234 | subject: \x1b[2K\x1b[1Ahello\rfake line\x07"
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), mock.patch("builtins.input", return_value="n"):
+            confirm_in_terminal("gmail__trash_email", {"message_id": "abc1234"}, [hostile], "request\x1b[0m")
+        shown = err.getvalue()
+        for forbidden in ("\x1b", "\r", "\x07"):
+            self.assertNotIn(forbidden, shown)
+        self.assertIn("hello", shown)  # the text stays readable
+
+    def test_long_lines_in_the_question_are_cut(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), mock.patch("builtins.input", return_value="n"):
+            confirm_in_terminal("t", {"message_id": "abc1234"}, ["x" * 5000], "")
+        self.assertLess(len(err.getvalue()), 1000)
+
     def test_answer_without_timing_is_still_valid(self):
         self.assertIsNone(Answer("local", "A", True).timing)
 

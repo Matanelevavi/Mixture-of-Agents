@@ -31,8 +31,9 @@ from mcp.types import ToolAnnotations
 
 from .gmail_box import GmailBox
 
-# gmail.modify: read, label, trash and draft - everything except permanent
-# deletion. Asked for once now, so the next tools need no second sign-in.
+# gmail.modify: Google describes it as "read, compose, and send emails", without
+# permanent deletion. This server has no tool that sends, but the token itself could
+# send mail, so token.json must stay private. It is used because trash needs it.
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=True)
 # Trash can be undone for 30 days, but it still changes the mailbox, so it is

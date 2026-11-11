@@ -90,6 +90,17 @@ def describe_timing(timing: dict) -> str:
     return line
 
 
+def _plain(text: str, limit: int = 200) -> str:
+    """Text safe to print in the approval question: control characters (such as the escape
+    character that starts terminal control sequences) become '?', and long text is cut.
+
+    The lines shown with the question come from tool results, e.g. the subject of an
+    email, which anyone can write; they must not be able to rewrite what the terminal shows.
+    """
+    clean = "".join("?" if ord(c) < 32 or 0x7F <= ord(c) <= 0x9F else c for c in text)
+    return clean if len(clean) <= limit else clean[:limit] + "..."
+
+
 def confirm_in_terminal(name: str, arguments: Dict[str, Any], mentions: List[str], request: str = "") -> bool:
     """Ask the person at this machine before a tool that changes something runs.
 
@@ -99,10 +110,9 @@ def confirm_in_terminal(name: str, arguments: Dict[str, Any], mentions: List[str
     shown = ", ".join(f"{k}={v!r}" for k, v in arguments.items())
     sys.stderr.write(f"\nThe model wants to run {name}({shown}). This changes something.\n")
     if request:
-        shortened = request if len(request) <= 200 else request[:200] + "..."
-        sys.stderr.write(f"    your request was: {shortened}\n")
+        sys.stderr.write(f"    your request was: {_plain(request)}\n")
     for line in mentions:
-        sys.stderr.write(f"    seen earlier: {line}\n")
+        sys.stderr.write(f"    seen earlier: {_plain(line)}\n")
     sys.stderr.write("Allow? [y/N] ")
     sys.stderr.flush()
     try:

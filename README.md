@@ -288,15 +288,18 @@ change. It is meant for a dedicated test account, not a personal mailbox.
 | `read_email(message_id)` | headers and the text body (plain text, or HTML turned into text), cut at 8,000 characters | read-only |
 | `trash_email(message_id)` | only with `--allow-trash` (`moa.gmail-trash-example.json`): moves one email to the Trash; Gmail keeps it there for 30 days, so it can be restored | changes the mailbox |
 
-There is no tool that sends, forwards or permanently deletes mail.
+The server has no tool that sends, forwards or permanently deletes mail (the OAuth scope is broader; see below).
 
 Design points:
 
 * **OAuth 2.0, desktop app.** `python -m moa.servers.gmail --login` opens the browser once and
   saves `token.json`; the server itself never opens a browser, because over stdio its stdout
   belongs to the MCP protocol. `credentials.json` and `token.json` are in `.gitignore`.
-* **Scope `gmail.modify`**: read, label, trash and draft, but no permanent deletion. Requested now
-  so the planned tools need no second sign-in.
+* **Scope `gmail.modify`.** Google describes it as "read, compose, and send emails from your Gmail
+  account", without immediate permanent deletion. This server offers no tool that sends, but the
+  signed-in token itself could send mail, so `token.json` must stay private. The scope is used because
+  trashing needs a write scope; a setup that only reads could use the narrower `gmail.readonly`
+  (not tried here).
 * **Email text is untrusted input.** Anyone can send an email, so a message may carry
   instructions aimed at the model (prompt injection). `read_email` marks the body as data from
   the sender, and no tool can send or forward mail. Marking the body is a hint to the model, not
@@ -437,6 +440,8 @@ and oversized messages), the full two-peer flow, parallel execution, peer down,
 local Ollama down, unknown model, token enforcement and the CLI's JSON output.
 The agent-mode tests (described in [What was tested](#what-was-tested)) also start the real
 MCP servers.
+The Gmail tests use a fake Gmail service, so they need no Google account; the approval tests start a small MCP
+server (`tests/notes_server.py`) whose one tool is not marked read-only; the aggregator tests use the fake Ollama.
 
 ## Findings from a real two-machine run
 
