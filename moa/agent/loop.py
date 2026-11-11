@@ -16,6 +16,7 @@ collide, and the model can tell which machine a tool belongs to.
 from __future__ import annotations
 
 import asyncio
+import time
 from contextlib import AsyncExitStack
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, FrozenSet, List, Optional, Tuple
@@ -41,6 +42,7 @@ class ToolUse:
     arguments: Dict[str, Any]
     ok: bool
     error: Optional[str] = None
+    seconds: float = 0.0  # how long the tool call took, through MCP
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -53,6 +55,8 @@ class AgentResult:
     tools_used: List[ToolUse]
     stopped_early: bool = False                        # hit max_tool_calls before a final answer
     warnings: List[str] = field(default_factory=list)  # servers that could not be used
+    setup_s: float = 0.0                               # connecting to the MCP servers and listing their tools
+    model_s: List[float] = field(default_factory=list)  # one entry per call to the model
 
 
 @dataclass
@@ -88,19 +92,26 @@ def run_agent(prompt: str, ollama: OllamaClient, config: AgentConfig,
 async def _run(prompt: str, ollama: OllamaClient, config: AgentConfig, model: Optional[str],
                avoid: Optional[str], allowed_tools: Optional[FrozenSet[str]]) -> AgentResult:
     async with AsyncExitStack() as stack:  # closes every MCP connection at the end
+        started = time.perf_counter()
         toolbox = await _open_toolbox(stack, config, allowed_tools)
+        setup_s = time.perf_counter() - started
         model_name = await asyncio.to_thread(ollama.resolve_model, model, avoid)
         messages = _first_messages(prompt, toolbox)
         used: List[ToolUse] = []
+        model_s: List[float] = []
 
         while True:
+            started = time.perf_counter()
             reply = await asyncio.to_thread(ollama.chat, messages, model_name, toolbox.specs or None)
+            model_s.append(time.perf_counter() - started)
             if not reply.tool_calls:
-                return AgentResult(reply.text, reply.model, used, warnings=toolbox.warnings)
+                return AgentResult(reply.text, reply.model, used, warnings=toolbox.warnings,
+                                   setup_s=setup_s, model_s=model_s)
             if len(used) + len(reply.tool_calls) > config.max_tool_calls:
                 note = f"(stopped: the model asked for more than {config.max_tool_calls} tool calls)"
                 return AgentResult(f"{reply.text}\n{note}".strip(), reply.model, used,
-                                   stopped_early=True, warnings=toolbox.warnings)
+                                   stopped_early=True, warnings=toolbox.warnings,
+                                   setup_s=setup_s, model_s=model_s)
 
             messages.append(_assistant_message(reply))
             for call in reply.tool_calls:
@@ -166,12 +177,15 @@ async def _call_tool(toolbox: Toolbox, call: ToolCall) -> Tuple[str, ToolUse]:
         return f"Error: {error}", ToolUse(call.name, call.arguments, False, error)
 
     client, tool_name = route
+    started = time.perf_counter()
     try:
         result = await client.call_tool(tool_name, call.arguments)
     except Exception as exc:
-        return f"Error: {reason(exc)}", ToolUse(call.name, call.arguments, False, reason(exc))
+        return (f"Error: {reason(exc)}",
+                ToolUse(call.name, call.arguments, False, reason(exc), time.perf_counter() - started))
+    seconds = time.perf_counter() - started
 
     text = "\n".join(block.text for block in result.content if getattr(block, "type", None) == "text")
     if result.is_error:
-        return text or "Error", ToolUse(call.name, call.arguments, False, text or "tool error")
-    return text, ToolUse(call.name, call.arguments, True)
+        return text or "Error", ToolUse(call.name, call.arguments, False, text or "tool error", seconds)
+    return text, ToolUse(call.name, call.arguments, True, None, seconds)

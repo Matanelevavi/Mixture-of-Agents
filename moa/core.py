@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from typing import List, Optional, Tuple
 
-from .agent import AgentConfig, AgentError, run_agent
+from .agent import AgentConfig, AgentError, AgentResult, run_agent
 from .ollama_client import OllamaClient, OllamaError
 from .peer_client import PeerError, ask_peer
 
@@ -23,6 +23,7 @@ class Answer:
     elapsed_s: float = 0.0
     tools: Optional[List[dict]] = None  # agent mode only: the tool calls that produced the answer
     warnings: Optional[List[str]] = None  # agent mode only: MCP servers that could not be used
+    timing: Optional[dict] = None         # local agent mode only: seconds spent per stage (see _timing)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -40,9 +41,16 @@ def _local(ollama: OllamaClient, prompt: str, model: Optional[str], node: str,
         return Answer("local", node, True, result.model, result.text,
                       elapsed_s=time.perf_counter() - started,
                       tools=[t.to_dict() for t in result.tools_used],
-                      warnings=result.warnings or None)
+                      warnings=result.warnings or None, timing=_timing(result))
     except (OllamaError, AgentError) as exc:
         return Answer("local", node, False, error=str(exc), elapsed_s=time.perf_counter() - started)
+
+
+def _timing(result: AgentResult) -> dict:
+    """Where the time of an agent answer went (measured in this process)."""
+    return {"setup_s": round(result.setup_s, 2),
+            "model_s": [round(t, 2) for t in result.model_s],
+            "tools_s": round(sum(t.seconds for t in result.tools_used), 2)}
 
 
 def _remote(host: str, port: int, prompt: str, model: Optional[str],

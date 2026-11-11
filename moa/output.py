@@ -38,6 +38,8 @@ def print_answer(title: str, answer: Answer) -> None:
         print(f"model: {answer.model} | time: {answer.elapsed_s:.1f}s")
         if answer.tools is not None:
             print(f"tools: {describe_tools(answer.tools)}")
+        if answer.timing:
+            print(f"timing: {describe_timing(answer.timing)}")
         for warning in answer.warnings or []:
             print(f"warning: {warning}")
         print(RULE)
@@ -67,3 +69,11 @@ def describe_tools(tools: List[dict]) -> str:
         status = "ok" if t.get("ok") else f"FAILED ({t.get('error')})"
         parts.append(f"{t.get('name')}({arguments}) {status}")
     return "; ".join(parts)
+
+
+def describe_timing(timing: dict) -> str:
+    """Where the time went: starting the MCP servers, each model call, the tool calls."""
+    calls = timing.get("model_s") or []
+    model = ", ".join(f"{t:.1f}s" for t in calls) or "none"
+    return (f"MCP setup {timing.get('setup_s', 0):.1f}s | model calls ({len(calls)}): {model} "
+            f"| tools {timing.get('tools_s', 0):.1f}s")

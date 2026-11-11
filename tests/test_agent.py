@@ -59,6 +59,13 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(set(offered), {"files__list_files", "files__read_file"})
         self.assertIn("path", offered["files__read_file"]["parameters"]["properties"])
 
+    def test_time_is_measured_per_stage(self):
+        result = run_agent("CALL files__read_file {\"path\": \"todo.txt\"}", self.ollama, self.config)
+        self.assertEqual(len(result.model_s), 2)  # one call asking for the tool, one giving the answer
+        self.assertGreater(result.setup_s, 0)
+        self.assertGreater(result.tools_used[0].seconds, 0)
+        self.assertTrue(all(t > 0 for t in result.model_s))
+
     def test_plain_answer_when_the_model_needs_no_tool(self):
         result = run_agent("hello", self.ollama, self.config)
         self.assertEqual(result.tools_used, [])
