@@ -164,9 +164,9 @@ class TrashTests(unittest.TestCase):
 class GmailServerTests(unittest.TestCase):
     """The same box behind a real MCP server, through an in-memory MCP client."""
 
-    def _with_client(self, action):
+    def _with_client(self, action, allow_trash=True):
         async def run():
-            async with Client(build_server(GmailBox(FakeGmail(MAILBOX)))) as client:
+            async with Client(build_server(GmailBox(FakeGmail(MAILBOX)), allow_trash=allow_trash)) as client:
                 return await action(client)
         return asyncio.run(run())
 
@@ -179,6 +179,10 @@ class GmailServerTests(unittest.TestCase):
         self.assertTrue(tools["trash_email"].annotations.destructive_hint)
         for t in tools.values():
             self.assertTrue(t.description)
+
+    def test_trash_is_not_offered_unless_allowed(self):
+        tools = self._with_client(lambda c: c.list_tools(), allow_trash=False).tools
+        self.assertEqual({t.name for t in tools}, {"search_emails", "read_email"})
 
     def test_tool_call_through_mcp(self):
         result = self._with_client(lambda c: c.call_tool("read_email", {"message_id": "a1"}))

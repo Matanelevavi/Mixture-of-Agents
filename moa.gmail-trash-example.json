@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "gmail": {
+      "command": "python",
+      "args": ["-m", "moa.servers.gmail", "--allow-trash"]
+    }
+  },
+  "remoteAllowedTools": [],
+  "maxToolCalls": 8
+}

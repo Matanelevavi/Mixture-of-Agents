@@ -42,8 +42,8 @@ class ApprovalTests(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _confirm(self, answer):
-        def confirm(name, arguments, mentions):
-            self.asked.append((name, arguments, mentions))
+        def confirm(name, arguments, mentions, request):
+            self.asked.append((name, arguments, mentions, request))
             return answer
         return confirm
 
@@ -54,7 +54,7 @@ class ApprovalTests(unittest.TestCase):
         self.assertEqual(self.asked[0][:2], ("notes__add_note", {"text": "pay rent"}))
 
     def test_time_spent_waiting_for_the_person_is_recorded_apart_from_the_tool_time(self):
-        def slow_yes(name, arguments, mentions):
+        def slow_yes(name, arguments, mentions, request):
             time.sleep(0.3)
             return True
         result = run_agent(ADD, self.ollama, self.config, confirm=slow_yes)
@@ -72,6 +72,10 @@ class ApprovalTests(unittest.TestCase):
         result = run_agent(ADD, self.ollama, self.config)  # e.g. a prompt from the peer
         self.assertFalse(self.notes.exists())
         self.assertIn("no one is here to approve", result.tools_used[0].error)
+
+    def test_the_question_includes_the_users_original_request(self):
+        run_agent(ADD, self.ollama, self.config, confirm=self._confirm(False))
+        self.assertEqual(self.asked[0][3], ADD)
 
     def test_read_only_tools_run_without_asking(self):
         result = run_agent('CALL files__read_file {"path": "todo.txt"}', self.ollama, self.config,

@@ -85,7 +85,7 @@ def describe_timing(timing: dict) -> str:
     return line
 
 
-def confirm_in_terminal(name: str, arguments: Dict[str, Any], mentions: List[str]) -> bool:
+def confirm_in_terminal(name: str, arguments: Dict[str, Any], mentions: List[str], request: str = "") -> bool:
     """Ask the person at this machine before a tool that changes something runs.
 
     Written to stderr, so `--json` output stays clean. Anything but y/yes,
@@ -93,6 +93,9 @@ def confirm_in_terminal(name: str, arguments: Dict[str, Any], mentions: List[str
     """
     shown = ", ".join(f"{k}={v!r}" for k, v in arguments.items())
     sys.stderr.write(f"\nThe model wants to run {name}({shown}). This changes something.\n")
+    if request:
+        shortened = request if len(request) <= 200 else request[:200] + "..."
+        sys.stderr.write(f"    your request was: {shortened}\n")
     for line in mentions:
         sys.stderr.write(f"    seen earlier: {line}\n")
     sys.stderr.write("Allow? [y/N] ")
