@@ -385,7 +385,45 @@ shows a successful tool call that could have returned it, and to mark other such
 file it never read. The aggregator is itself a model, so this is an instruction it may not
 follow; the tool records printed by the code remain the reliable evidence.
 
-Not yet run with real models; findings will be added here.
+**What happened with real models** (two physical machines on one Wi-Fi: A asks and aggregates with
+`qwen2.5:7b`, B answers with `llama3.2:3b`; all results are from one to three runs, so they are observations).
+
+*Without tools.* On "Write about 150 words on how the TCP three-way handshake works", both models described the
+three steps and the combined answer merged them, closing with `Agreement: partial`. The aggregator call took 303.7 s
+against 64.9 s for A's own answer; the cause was not found (Ollama's own numbers were not printed yet).
+On a question with a known answer ("In one line each: which port does DNS over TLS use, which port does DNS over
+HTTPS use, and how many bytes is the minimum IPv4 header?"; answers 853, 443 and 20), the same command was run three times:
+
+| Run | B's answer for the IPv4 header | Combined answer | `Agreement` |
+|---|---|---|---|
+| 1 | 12 bytes (wrong) | 20, marked `(unverified)` | `partial` |
+| 2 | 20 | 20 | `full` |
+| 3 | 20 | 20 | `full` |
+
+The combined answer had the right value every time and the `Agreement` line matched whether the answers differed. But in
+run 1 the combined text did not say that B had answered 12; only the `partial` hints at a difference. In run 3 it called the
+answer "fully supported", which only means that two models agree: two models can be wrong together. The same B model gave
+12 once and 20 twice for the same prompt, so a single run says little.
+
+*Agent mode, where the aggregator also receives each answer's tool record.* Prompt: "List the files you can see and
+read the one you find. Then tell me what it says." Two runs, both with the same pattern:
+
+| | A (`qwen2.5:7b`) | B (`llama3.2:3b`) |
+|---|---|---|
+| Tool record | `list_files` ok, `read_file(path='todo.txt')` ok | `list_files` ok, then `read_file` on a name it made up (`file.txt`, then `README.txt`), failed |
+| Answer | Quoted `todo.txt` | Never read `b_notes.txt`, the one file it had listed; run 1 said it "doesn't seem to be readable", run 2 said it contains "some unformatted text" |
+
+Neither claim about `b_notes.txt` is backed by a tool call. The aggregator handled the two runs differently. In run 1 it wrote that
+B "attempted to read the file and encountered an error" about `b_notes.txt`; the record shows the failed read was of
+`file.txt`, so this statement is false. In run 2 it left B's claim about `b_notes.txt` out, but it reported "`README.txt`
+does not exist" as a finding (a name B invented, not asked about by anyone) and described it as a disagreement between the
+answers, which it was not. In neither run did the combined answer say that nobody had read `b_notes.txt`. Both runs
+show that giving the aggregator the tool record does not make it use the record correctly: the records printed by the
+code under each answer remain the reliable evidence, and the combined answer is not.
+
+Timing (Ollama's numbers for the aggregator call): the answer is written at about 6-8 tokens per second on A's CPU, so
+its time follows the length of the answer; reading the same 372-token prompt took 11.1 s the first time and 1.4 s on the
+next two runs (possibly because Ollama reuses a shared prompt start; not verified).
 
 ## Tests
 
@@ -531,6 +569,8 @@ In both cases the evidence was in the tool record and the warning line, not in t
 * Answers are returned when complete; streaming tokens as they are generated would need
   streaming frames in the protocol.
 * Extends naturally to N peers (`--peer` repeated).
+* The aggregator receives the tool records but did not use them reliably (see its findings). A possible next
+  step is to present them in a form that separates what succeeded from what failed, and to measure again.
 
 ## Note on how this was built
 
