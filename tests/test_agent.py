@@ -59,6 +59,19 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(set(offered), {"files__list_files", "files__read_file"})
         self.assertIn("path", offered["files__read_file"]["parameters"]["properties"])
 
+    def test_the_model_is_told_todays_date(self):
+        run_agent("hello", self.ollama, self.config)
+        system = self.fake.chat_requests[0]["messages"][0]
+        self.assertEqual(system["role"], "system")
+        self.assertRegex(system["content"], r"Today is \w+, \d{4}-\d{2}-\d{2}, \d{2}:\d{2}")
+
+    def test_date_line_format(self):
+        from datetime import datetime, timedelta, timezone
+        from moa.agent.loop import _today
+        moment = datetime(2026, 11, 11, 9, 30, tzinfo=timezone(timedelta(hours=2)))
+        self.assertEqual(_today(moment),
+                         "Today is Wednesday, 2026-11-11, 09:30 (this machine's local time, UTC+0200).")
+
     def test_time_is_measured_per_stage(self):
         result = run_agent("CALL files__read_file {\"path\": \"todo.txt\"}", self.ollama, self.config)
         self.assertEqual(len(result.model_s), 2)  # one call asking for the tool, one giving the answer

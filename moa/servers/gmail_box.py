@@ -34,8 +34,9 @@ class GmailBox:
         """Search the mailbox with Gmail search syntax and list the matching emails.
 
         Examples of `query`: "is:unread", "newer_than:7d", "from:alice@example.com",
-        "subject:meeting". An empty query lists the newest emails. Each line starts
-        with the email's id, which read_email takes.
+        "subject:meeting", "after:2026/11/01" (dates are YYYY/MM/DD; words like
+        "yesterday" do not work). An empty query lists the newest emails. Each
+        line starts with the email's id, which read_email takes.
         """
         count = max(1, min(int(max_results), MAX_SEARCH_RESULTS))
         listed = self._call(self._messages.list(userId="me", q=query, maxResults=count))

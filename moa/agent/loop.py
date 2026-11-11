@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import datetime
 from contextlib import AsyncExitStack
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Set, Tuple
@@ -154,10 +155,22 @@ async def _open_toolbox(stack: AsyncExitStack, config: AgentConfig,
     return toolbox
 
 
-def _first_messages(prompt: str, toolbox: Toolbox) -> List[Dict[str, Any]]:
+def _today(now: Optional[datetime] = None) -> str:
+    """The date line for the model, read from this machine's clock at the start of every question.
+
+    A model does not know today's date (found in a real run: asked for "today's
+    emails" it invented the Gmail query `after:yesterday before:now`, and then
+    answered that no email had arrived). Taken fresh for each question, so a
+    long interactive session never works with an old date.
+    """
+    now = now or datetime.now().astimezone()
+    return f"Today is {now:%A}, {now:%Y-%m-%d}, {now:%H:%M} (this machine's local time, UTC{now:%z})."
+
+
+def _first_messages(prompt: str, toolbox: Toolbox, now: Optional[datetime] = None) -> List[Dict[str, Any]]:
     messages = []
     if toolbox.specs:
-        messages.append({"role": "system", "content": SYSTEM_PROMPT})
+        messages.append({"role": "system", "content": f"{SYSTEM_PROMPT} {_today(now)}"})
     if toolbox.warnings:  # tell the model, so it does not answer as if it had looked
         messages.append({"role": "system", "content": _unavailable_note(toolbox.warnings)})
     messages.append({"role": "user", "content": prompt})
