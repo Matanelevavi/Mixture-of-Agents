@@ -72,4 +72,5 @@ def aggregate(question: str, answers: List[Answer], ollama: OllamaClient,
     except OllamaError as exc:
         return Answer("aggregate", node_name, False, error=str(exc),
                       elapsed_s=time.perf_counter() - started)
-    return Answer("aggregate", node_name, True, result.model, result.text, elapsed_s=result.elapsed_s)
+    return Answer("aggregate", node_name, True, result.model, result.text, elapsed_s=result.elapsed_s,
+                  timing=result.stats)

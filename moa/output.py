@@ -75,7 +75,12 @@ def describe_tools(tools: List[dict]) -> str:
 
 
 def describe_timing(timing: dict) -> str:
-    """Where the time went: starting the MCP servers, each model call, the tool calls."""
+    """Where the time went: for an agent answer, starting the MCP servers, each model call and
+    the tool calls; for a plain model call, the numbers Ollama reports."""
+    if "setup_s" not in timing:
+        return (f"Ollama reports: model load {timing.get('load_s', '?')}s | "
+                f"prompt {timing.get('prompt_tokens', '?')} tokens read in {timing.get('prompt_s', '?')}s | "
+                f"answer {timing.get('output_tokens', '?')} tokens written in {timing.get('output_s', '?')}s")
     calls = timing.get("model_s") or []
     model = ", ".join(f"{t:.1f}s" for t in calls) or "none"
     line = (f"MCP setup {timing.get('setup_s', 0):.1f}s | model calls ({len(calls)}): {model} "

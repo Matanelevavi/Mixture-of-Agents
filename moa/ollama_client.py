@@ -46,6 +46,7 @@ class Generation:
     text: str
     model: str
     elapsed_s: float
+    stats: Optional[Dict[str, float]] = None  # Ollama's own numbers (see _stats), when it reports them
 
 
 @dataclass
@@ -60,6 +61,23 @@ class ChatReply:
     text: str                  # the model's text (may be empty when it only asks for tools)
     tool_calls: List[ToolCall]  # empty = this is the final answer
     model: str
+
+
+def _stats(reply: Dict[str, Any]) -> Optional[Dict[str, float]]:
+    """Where Ollama says the time went: loading the model, reading the prompt, writing the answer.
+
+    Ollama reports durations in nanoseconds and token counts. None if it reports none of them.
+    """
+    keys = {"load_s": "load_duration", "prompt_s": "prompt_eval_duration", "output_s": "eval_duration"}
+    counts = {"prompt_tokens": "prompt_eval_count", "output_tokens": "eval_count"}
+    stats: Dict[str, float] = {}
+    for name, key in keys.items():
+        if isinstance(reply.get(key), (int, float)):
+            stats[name] = round(reply[key] / 1e9, 2)
+    for name, key in counts.items():
+        if isinstance(reply.get(key), (int, float)):
+            stats[name] = int(reply[key])
+    return stats or None
 
 
 _THINKING = re.compile(r"<think>.*?</think>", re.DOTALL)
@@ -137,6 +155,7 @@ class OllamaClient:
             text=reply["response"],
             model=reply.get("model", name),
             elapsed_s=time.perf_counter() - started,
+            stats=_stats(reply),
         )
 
     def chat(self, messages: List[Dict[str, Any]], model: str,

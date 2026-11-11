@@ -6,6 +6,7 @@ import unittest
 from unittest import mock
 
 from moa.core import Answer
+from moa.ollama_client import _stats
 from moa.output import confirm_in_terminal, describe_timing
 
 
@@ -13,6 +14,19 @@ class TimingOutputTests(unittest.TestCase):
     def test_timing_line_names_each_stage(self):
         line = describe_timing({"setup_s": 1.24, "model_s": [70.1, 80.34], "tools_s": 1.9})
         self.assertEqual(line, "MCP setup 1.2s | model calls (2): 70.1s, 80.3s | tools 1.9s")
+
+    def test_ollama_numbers_are_shown_for_a_plain_model_call(self):
+        line = describe_timing({"load_s": 0.1, "prompt_tokens": 700, "prompt_s": 40.2,
+                                "output_tokens": 190, "output_s": 250.5})
+        self.assertEqual(line, "Ollama reports: model load 0.1s | prompt 700 tokens read in 40.2s | "
+                               "answer 190 tokens written in 250.5s")
+
+    def test_ollama_reply_is_turned_into_seconds_and_token_counts(self):
+        reply = {"load_duration": 1_500_000_000, "prompt_eval_count": 700, "prompt_eval_duration": 40_000_000_000,
+                 "eval_count": 190, "eval_duration": 250_000_000_000}
+        self.assertEqual(_stats(reply), {"load_s": 1.5, "prompt_s": 40.0, "output_s": 250.0,
+                                         "prompt_tokens": 700, "output_tokens": 190})
+        self.assertIsNone(_stats({"response": "no numbers here"}))
 
     def test_approval_wait_is_shown_only_when_there_was_one(self):
         timing = {"setup_s": 1, "model_s": [2.0], "tools_s": 1, "approval_s": 98.8}
