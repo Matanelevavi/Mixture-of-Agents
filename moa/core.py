@@ -51,7 +51,8 @@ def _timing(result: AgentResult) -> dict:
     """Where the time of an agent answer went (measured in this process)."""
     return {"setup_s": round(result.setup_s, 2),
             "model_s": [round(t, 2) for t in result.model_s],
-            "tools_s": round(sum(t.seconds for t in result.tools_used), 2)}
+            "tools_s": round(sum(t.seconds for t in result.tools_used), 2),
+            "approval_s": round(sum(t.approval_s for t in result.tools_used), 2)}
 
 
 def _remote(host: str, port: int, prompt: str, model: Optional[str],

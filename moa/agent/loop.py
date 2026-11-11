@@ -52,6 +52,7 @@ class ToolUse:
     ok: bool
     error: Optional[str] = None
     seconds: float = 0.0  # how long the tool call took, through MCP
+    approval_s: float = 0.0  # how long the person took to answer the approval question, if one was asked
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -206,16 +207,19 @@ async def _call_tool(toolbox: Toolbox, call: ToolCall, confirm: Optional[Confirm
         error = f"tool {call.name!r} is not available"
         return f"Error: {error}", ToolUse(call.name, call.arguments, False, error)
 
+    waited = 0.0
     if call.name in toolbox.needs_approval:
         if confirm is None:
             error = "this tool changes something and no one is here to approve it"
-        elif not await asyncio.to_thread(confirm, call.name, call.arguments,
-                                         _mentions(history, call.arguments)):
-            error = "the user did not approve this action"
         else:
-            error = None
+            asked = time.perf_counter()
+            approved = await asyncio.to_thread(confirm, call.name, call.arguments,
+                                               _mentions(history, call.arguments))
+            waited = time.perf_counter() - asked
+            error = None if approved else "the user did not approve this action"
         if error:  # never executed
-            return f"Error: {error}; it was not done", ToolUse(call.name, call.arguments, False, error)
+            return (f"Error: {error}; it was not done",
+                    ToolUse(call.name, call.arguments, False, error, approval_s=waited))
 
     client, tool_name = route
     started = time.perf_counter()
@@ -223,13 +227,14 @@ async def _call_tool(toolbox: Toolbox, call: ToolCall, confirm: Optional[Confirm
         result = await client.call_tool(tool_name, call.arguments)
     except Exception as exc:
         return (f"Error: {reason(exc)}",
-                ToolUse(call.name, call.arguments, False, reason(exc), time.perf_counter() - started))
+                ToolUse(call.name, call.arguments, False, reason(exc), time.perf_counter() - started,
+                        waited))
     seconds = time.perf_counter() - started
 
     text = "\n".join(block.text for block in result.content if getattr(block, "type", None) == "text")
     if result.is_error:
-        return text or "Error", ToolUse(call.name, call.arguments, False, text or "tool error", seconds)
-    return text, ToolUse(call.name, call.arguments, True, None, seconds)
+        return text or "Error", ToolUse(call.name, call.arguments, False, text or "tool error", seconds, waited)
+    return text, ToolUse(call.name, call.arguments, True, None, seconds, waited)
 
 
 def _mentions(history: List[Dict[str, Any]], arguments: Dict[str, Any]) -> List[str]:

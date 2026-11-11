@@ -78,8 +78,11 @@ def describe_timing(timing: dict) -> str:
     """Where the time went: starting the MCP servers, each model call, the tool calls."""
     calls = timing.get("model_s") or []
     model = ", ".join(f"{t:.1f}s" for t in calls) or "none"
-    return (f"MCP setup {timing.get('setup_s', 0):.1f}s | model calls ({len(calls)}): {model} "
+    line = (f"MCP setup {timing.get('setup_s', 0):.1f}s | model calls ({len(calls)}): {model} "
             f"| tools {timing.get('tools_s', 0):.1f}s")
+    if timing.get("approval_s"):  # time the person took to answer, part of the total
+        line += f" | waiting for your approval {timing['approval_s']:.1f}s"
+    return line
 
 
 def confirm_in_terminal(name: str, arguments: Dict[str, Any], mentions: List[str]) -> bool:

@@ -8,6 +8,7 @@ import json
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -51,6 +52,14 @@ class ApprovalTests(unittest.TestCase):
         self.assertTrue(result.tools_used[0].ok)
         self.assertEqual(self.notes.read_text(encoding="utf-8"), "pay rent\n")
         self.assertEqual(self.asked[0][:2], ("notes__add_note", {"text": "pay rent"}))
+
+    def test_time_spent_waiting_for_the_person_is_recorded_apart_from_the_tool_time(self):
+        def slow_yes(name, arguments, mentions):
+            time.sleep(0.3)
+            return True
+        result = run_agent(ADD, self.ollama, self.config, confirm=slow_yes)
+        self.assertGreaterEqual(result.tools_used[0].approval_s, 0.3)
+        self.assertLess(result.tools_used[0].seconds, result.tools_used[0].approval_s + 5)
 
     def test_declined_call_is_not_run_and_the_model_is_told(self):
         result = run_agent(ADD, self.ollama, self.config, confirm=self._confirm(False))
